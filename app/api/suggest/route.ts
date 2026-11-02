@@ -4,6 +4,11 @@ import { normalizeNikeProduct } from "@/lib/nike";
 
 export const runtime = "nodejs";
 
+function asUnverifiedSearchProduct<T extends { sizes?: Array<{ label: string; localizedLabel?: string; status?: string | null; available?: boolean | null }> }>(product: T): T {
+  if (!Array.isArray(product.sizes)) return product;
+  return { ...product, sizes: product.sizes.map(({ label, localizedLabel }) => ({ label, localizedLabel, available: null, status: undefined })) } as T;
+}
+
 export async function GET(request: NextRequest) {
   const query = request.nextUrl.searchParams.get("q")?.trim().replace(/[%_]/g, " ");
   if (!query || query.length < 3) return NextResponse.json({ suggestions: [], source: "neon-cache" });
@@ -28,7 +33,7 @@ export async function GET(request: NextRequest) {
       const value = typeof row.product_json === "string" ? JSON.parse(row.product_json) : row.product_json;
       if (!value || typeof value !== "object") return [];
       const normalized = normalizeNikeProduct(value);
-      return normalized ? [normalized] : [];
+      return normalized ? [asUnverifiedSearchProduct(normalized)] : [];
     });
     return NextResponse.json({ suggestions, source: "neon-cache", cacheConfigured: true });
   } catch {
