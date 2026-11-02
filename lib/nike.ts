@@ -39,15 +39,48 @@ function textValue(value: unknown): string | undefined {
   return undefined;
 }
 
-function normalizeGender(item: Record<string, unknown>): ProductGender {
-  const raw = [item.gender, item.genders, item.gender_name, item.genderName, item.target_gender,
-    item.targetGender, item.audience, item.product_gender, item.gender_label, item.genderLabel]
-    .map(textValue).filter(Boolean).join(" ").toLowerCase();
-  if (/unisex|all gender|all-gender/.test(raw) || (/women|woman|female/.test(raw) && /men|man|male/.test(raw))) return "Unisex";
-  if (/kid|child|youth|toddler|infant|baby|grade school|preschool/.test(raw)) return "Kids";
-  if (/women|woman|female|girl/.test(raw)) return "Women";
-  if (/men|man|male|boy/.test(raw)) return "Men";
+function audienceText(item: Record<string, unknown>, title?: string, subtitle?: string): string {
+  const explicit = [item.gender, item.genders, item.gender_name, item.genderName, item.target_gender,
+    item.targetGender, item.audience, item.product_gender, item.gender_label, item.genderLabel,
+    item.category, item.categories, item.product_type, item.productType, item.product_category,
+    item.productCategory, item.classification]
+    .map(textValue).filter(Boolean).join(" ");
+  return `${title ?? ""} ${subtitle ?? ""} ${explicit}`.toLowerCase();
+}
+
+function hasYouthSizeLabels(item: Record<string, unknown>): boolean {
+  const sizes = normalizeSizeList(item.sizes ?? item.size_availability ?? item.available_sizes) ?? [];
+  return sizes.some((size) => /\d+(?:\.\d+)?\s*y\b/i.test(`${size.label} ${size.localizedLabel ?? ""}`));
+}
+
+function normalizeGender(item: Record<string, unknown>, title?: string, subtitle?: string): ProductGender {
+  const titleAndSubtitle = `${title ?? ""} ${subtitle ?? ""}`.toLowerCase();
+  const raw = audienceText(item, title, subtitle);
+
+  // Specific youth taxonomy or explicit Y sizing wins over a broad or inconsistent
+  // provider gender field (e.g. Women metadata attached to a Big Kids shoe).
+  const youthMarkers = /\b(big kids?|grade school|gs|little kids?|preschool|ps|toddler|infant|youth|kids?|boys?|girls?)\b/;
+  if (youthMarkers.test(titleAndSubtitle) || youthMarkers.test(raw) || hasYouthSizeLabels(item)) return "Kids";
+  const saysWomen = /\bwomen|woman|female\b/.test(raw);
+  const saysMen = /\bmen|man|male\b/.test(raw);
+  if (/\bunisex|all gender|all-gender\b/.test(raw) || (saysWomen && saysMen)) return "Unisex";
+  if (saysWomen) return "Women";
+  if (saysMen) return "Men";
+  if (/\bkid|child|youth|toddler|infant|baby|grade school|preschool|boys?|girls?\b/.test(raw)) return "Kids";
   return "Unknown";
+}
+
+function normalizeSizeSystem(item: Record<string, unknown>, gender: ProductGender, title?: string, subtitle?: string): NikeProduct["sizeSystem"] {
+  const text = `${title ?? ""} ${subtitle ?? ""}`.toLowerCase();
+  if (/\b(infant|baby)\b/.test(text)) return "infant";
+  if (/\b(toddler|td|crib)\b/.test(text)) return "toddler";
+  if (/\b(big kids?|grade school|gs shoes|little kids?|preschool|ps shoes|youth|kids?'? shoes)\b/.test(text)) return "youth";
+  if (hasYouthSizeLabels(item)) return "youth";
+  if (gender === "Kids") return "youth";
+  if (gender === "Men") return "men";
+  if (gender === "Women") return "women";
+  if (gender === "Unisex") return "unisex";
+  return "unknown";
 }
 
 function normalizeCategory(item: Record<string, unknown>, title: string, subtitle?: string): ProductCategory {
@@ -111,21 +144,27 @@ function safeNikeUrl(value: unknown): string | undefined {
 
 function normalizeSizeList(value: unknown): ProductSize[] | undefined {
   if (!Array.isArray(value)) return undefined;
-  const sizes = value.flatMap((entry) => {
+  const sizes = value.flatMap<ProductSize>((entry) => {
     const item = record(entry);
     if (!item) {
       const label = firstString(entry);
-      return label ? [{ label }] : [];
+      return label ? [{ label, available: null }] : [];
     }
-    const label = firstString(item.label, item.localized_label, item.size, item.name, item.value);
+    const label = firstString(item.label, item.localized_label, item.localizedLabel, item.size, item.name, item.value);
     if (!label) return [];
+    const localizedLabel = firstString(item.localized_label, item.localizedLabel);
     const status = firstString(item.status, item.ship, item.availability);
-    const available = typeof item.available === "boolean"
-      ? item.available
+    const explicitAvailability = item.available ?? item.is_available ?? item.isAvailable ?? item.in_stock ?? item.inStock;
+    const available = typeof explicitAvailability === "boolean"
+      ? explicitAvailability
       : status
-        ? !/out|oos|unavailable|sold/i.test(status)
+        ? /out|oos|unavailable|sold|inactive|not available/i.test(status)
+          ? false
+          : /in[\s_-]?stock|available|high|medium|low|limited|few/i.test(status)
+            ? true
+            : null
         : null;
-    return [{ label, status, available }];
+    return [{ label, localizedLabel, status, available }];
   });
   return sizes.length ? sizes : undefined;
 }
@@ -149,19 +188,26 @@ export function normalizeNikeProduct(value: unknown): NikeProduct | null {
   const images = item.images ?? item.image_urls;
   const subtitle = firstString(item.subtitle, item.description, item.category, item.product_type);
 
+  const sizes = normalizeSizeList(item.sizes ?? item.size_availability ?? item.available_sizes);
+  const gender = normalizeGender(item, title, subtitle);
+  const rawOnSale = item.on_sale ?? item.onSale ?? item.is_sale ?? item.isSale ?? item.sale;
+  const onSale = rawOnSale === true || (discountPercent ?? 0) > 0 || (price !== undefined && fullPrice !== undefined && fullPrice > price);
+
   return {
-    id: firstString(item.id, item.product_id, item.productId, item.style_code, item.sku) ?? url,
+    id: firstString(item.id, item.product_id, item.productId, item.style_code, item.sku, item.style_color) ?? url,
     title,
     subtitle,
-    styleCode: firstString(item.style_code, item.styleColor, item.sku, item.product_code),
+    styleCode: firstString(item.style_code, item.styleColor, item.style_color, item.sku, item.product_code),
     url,
     imageUrl: imageFrom(item.image ?? item.image_url ?? item.imageUrl ?? item.hero_image ?? images),
     price,
     fullPrice,
     currency: firstString(item.currency, record(item.price)?.currency, record(pricing?.current)?.currency) ?? "USD",
     discountPercent,
-    sizes: normalizeSizeList(item.sizes ?? item.size_availability ?? item.available_sizes),
-    gender: normalizeGender(item),
+    sizes,
+    gender,
+    sizeSystem: normalizeSizeSystem(item, gender, title, subtitle),
+    onSale,
     category: normalizeCategory(item, title, subtitle),
   };
 }
