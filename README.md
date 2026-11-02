@@ -10,11 +10,14 @@ This is an independent tool and is not affiliated with or endorsed by Nike, Inc.
 
 - Search Nike's US public product listings by product name, model, or style code.
 - Optional sale-only search.
-- Daily cap of 20 searches per client IP (stored as a keyed hash when Neon is connected; process-local fallback otherwise).
-- Product image, style code, current price, original price, markdown percentage, and size data when returned by the provider.
-- Local category, size, and sort filters.
-- ZIP-code shortcut to search for nearby Nike Factory/Clearance Stores in Google Maps.
-- Product-specific **Check store pickup** handoff to Nike's product page.
+- Daily cap of 20 live provider-search misses per client IP (stored as a keyed hash when Neon is connected; process-local fallback otherwise). Cache hits do not consume a provider request or search-limit slot.
+- Product image, style code, current price, original price, markdown percentage, audience and online size data when returned by the provider.
+- Relevance-filtered search: meaningful search terms must match the returned product title/description/style code, reducing unrelated Nike fallback listings.
+- Product suggestions from the Neon catalogue as the user types. Typeahead reads Neon only and does not make paid API requests; a new product appears in suggestions after its first successful search is cached.
+- Men, Women, Kids, and Unisex audience filters; product type, returned online size, and sort filters. Size options are drawn from the product size data already loaded; opening a product's Sizes action fetches and caches its online size list.
+- ZIP-code store locator with 5, 10, 25, 50, or 100-mile distance filters and store cards sorted by distance.
+- Product-specific **Check Nike pickup** handoff to the Nike product page.
+- Persistent Neon caching: identical search/filter combinations are reused for 12 hours; product details and online size data are reused for 18 hours; nearby store locations are reused for 24 hours.
 - Save products to a browser watchlist; Neon persistence is enabled when `DATABASE_URL` is configured and `db/schema.sql` has been run.
 - Daily price history refresh for up to 10 saved product links per day through Vercel Cron (requires `API_SH_KEY`, `DATABASE_URL`, and `CRON_SECRET`).
 - No user account or personal information is required. The watchlist uses a random browser-generated visitor ID; clearing browser storage loses the local watchlist unless the database is configured and that visitor ID is retained.
@@ -34,7 +37,7 @@ This is an independent tool and is not affiliated with or endorsed by Nike, Inc.
 2. Create an API key.
 3. Add it to Vercel as `API_SH_KEY` (or copy it to `.env.local` for local development).
 
-API.SH documents 1,000 free credits per month for its free account. Nike search and product-detail calls are listed at one credit each. The app limits its daily background refresh to 10 product calls, leaving most of the free monthly allowance for manual searches. Check the provider's current [Nike API page](https://api.sh/nike-api) and [general docs](https://api.sh/docs) before relying on its quota or pricing; terms and limits can change.
+API.SH currently lists one credit per Nike search and product-detail call. Free-credit allowances and pricing are subject to provider changes; check your current API.SH dashboard for the exact quota. The app limits its daily background refresh to 10 product calls and uses Neon caching to avoid repeated exact searches and detail lookups.
 
 ### 2. Connect Neon
 
@@ -43,7 +46,7 @@ API.SH documents 1,000 free credits per month for its free account. Nike search 
 3. Add it to Vercel as `DATABASE_URL`.
 4. Open Neon's SQL Editor and run the contents of [`db/schema.sql`](./db/schema.sql).
 
-The database contains `watched_products`, `price_history`, and `search_rate_limits`. If Neon is not configured, searching still works and the watchlist falls back to this browser.
+The database contains watchlists, price history, hashed search limits, a shared product search cache, product details cache, a cached product catalogue for typeahead, and a nearby-store cache. Run the **entire current** `db/schema.sql` in Neon's SQL Editor. It uses `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so it can be run again on an existing project without deleting your existing watchlist or history. If Neon is not configured, live product search still works, but persistent search caching and catalog suggestions are unavailable.
 
 ### 3. Deploy to Vercel
 
@@ -67,7 +70,7 @@ Open `http://localhost:3000`.
 | Variable | Required for | Notes |
 |---|---|---|
 | `API_SH_KEY` | Live Nike product search | API.SH key; keep server-side only |
-| `DATABASE_URL` | Cross-session watchlist and price history | Neon pooled PostgreSQL connection string |
+| `DATABASE_URL` | Watchlist, history, product/search/store caches | Neon pooled PostgreSQL connection string |
 | `CRON_SECRET` | Daily price-check job | Random secret, at least 32 characters recommended |
 | `MAX_DAILY_PRICE_CHECKS` | Optional | Default 10; hard-capped at 10 by this starter |
 | `RATE_LIMIT_SALT` | Optional | Salt for hashed-IP search limits; defaults to `API_SH_KEY` |
@@ -76,9 +79,11 @@ Do not use a `NEXT_PUBLIC_` prefix for any of these secrets.
 
 ## How store availability is handled
 
-Nike's public help page explains that a shopper can open an item's information page, choose a color and size, and use the Pickup section to see participating stores with that item available for pickup. The product card's **Check store pickup** button opens that Nike product page. The separate ZIP shortcut opens a map search for nearby Nike stores.
+Nike's public help page explains that a shopper can open an item's information page, choose a color and size, and use the Pickup section to see participating stores with that item available for pickup. The product card's **Check Nike pickup** button opens that Nike product page. The ZIP locator shows nearby store locations directly in the app and gives an optional directions link for each store.
 
-The app intentionally does **not** translate online shipping size status into store stock. A future version could display store-by-store results inside the app only if an authorized data source exposes Nike's pickup inventory in a permitted, stable way.
+The ZIP locator geocodes a five-digit US ZIP through Zippopotam.us, then finds mapped Nike locations through OpenStreetMap Overpass and calculates straight-line distance from the ZIP centroid (not driving distance). Store map data can be incomplete or have missing addresses. The app labels Factory/Clearance stores when those words are present in map data, but does not guarantee that the list contains every Nike outlet. Nearby store results are cached in Neon for 24 hours.
+
+The app intentionally does **not** translate online shipping size status into store stock. Nike's public help instructions say shoppers can select a product color and size and review participating stores in the Pickup section. The API.SH Nike product API returns public product and online size information, not a public store-by-store inventory feed. A Nike location card is therefore a nearby store, **not a confirmation that the searched shoe is available there**. Use the Nike Pickup link for official size-specific pickup checking.
 
 ## Price monitoring behavior
 
@@ -105,6 +110,8 @@ app/
     health/route.ts
     product/route.ts
     search/route.ts
+    stores/route.ts
+    suggest/route.ts
     watchlist/route.ts
   globals.css
   layout.tsx
@@ -114,6 +121,7 @@ app/
  lib/
   db.ts
   nike.ts
+  search-cache.ts
   types.ts
 vercel.json
 .env.example
