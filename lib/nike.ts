@@ -1,4 +1,4 @@
-import type { NikeProduct, ProductSize } from "@/lib/types";
+import type { NikeProduct, ProductCategory, ProductGender, ProductSize } from "@/lib/types";
 
 const API_BASE = "https://api.api.sh";
 
@@ -27,6 +27,36 @@ function numeric(value: unknown): number | undefined {
   const obj = record(value);
   if (obj) return numeric(obj.amount ?? obj.value ?? obj.price);
   return undefined;
+}
+
+
+function textValue(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (Array.isArray(value)) return value.map(textValue).filter(Boolean).join(" ") || undefined;
+  const obj = record(value);
+  if (obj) return firstString(obj.name, obj.label, obj.value, obj.localized_label, obj.title);
+  return undefined;
+}
+
+function normalizeGender(item: Record<string, unknown>): ProductGender {
+  const raw = [item.gender, item.genders, item.gender_name, item.genderName, item.target_gender,
+    item.targetGender, item.audience, item.product_gender, item.gender_label, item.genderLabel]
+    .map(textValue).filter(Boolean).join(" ").toLowerCase();
+  if (/unisex|all gender|all-gender/.test(raw) || (/women|woman|female/.test(raw) && /men|man|male/.test(raw))) return "Unisex";
+  if (/kid|child|youth|toddler|infant|baby|grade school|preschool/.test(raw)) return "Kids";
+  if (/women|woman|female|girl/.test(raw)) return "Women";
+  if (/men|man|male|boy/.test(raw)) return "Men";
+  return "Unknown";
+}
+
+function normalizeCategory(item: Record<string, unknown>, title: string, subtitle?: string): ProductCategory {
+  const raw = [item.category, item.categories, item.product_type, item.productType, item.product_category,
+    item.productCategory, item.classification, subtitle, title].map(textValue).filter(Boolean).join(" ").toLowerCase();
+  if (/shoe|sneaker|running|basketball|football boot|cleat|sandals|slide/.test(raw)) return "Shoes";
+  if (/shirt|hoodie|jacket|fleece|pants|shorts|leggings|bra|jersey|sweatshirt|tee|apparel|clothing/.test(raw)) return "Apparel";
+  if (/bag|backpack|cap|hat|socks|glove|bottle|accessor|equipment/.test(raw)) return "Accessories";
+  return "Other";
 }
 
 function imageFrom(value: unknown): string | undefined {
@@ -117,11 +147,12 @@ export function normalizeNikeProduct(value: unknown): NikeProduct | null {
       ? Math.round(((fullPrice - price) / fullPrice) * 100)
       : undefined;
   const images = item.images ?? item.image_urls;
+  const subtitle = firstString(item.subtitle, item.description, item.category, item.product_type);
 
   return {
     id: firstString(item.id, item.product_id, item.productId, item.style_code, item.sku) ?? url,
     title,
-    subtitle: firstString(item.subtitle, item.description, item.category, item.product_type),
+    subtitle,
     styleCode: firstString(item.style_code, item.styleColor, item.sku, item.product_code),
     url,
     imageUrl: imageFrom(item.image ?? item.image_url ?? item.imageUrl ?? item.hero_image ?? images),
@@ -130,6 +161,8 @@ export function normalizeNikeProduct(value: unknown): NikeProduct | null {
     currency: firstString(item.currency, record(item.price)?.currency, record(pricing?.current)?.currency) ?? "USD",
     discountPercent,
     sizes: normalizeSizeList(item.sizes ?? item.size_availability ?? item.available_sizes),
+    gender: normalizeGender(item),
+    category: normalizeCategory(item, title, subtitle),
   };
 }
 
