@@ -5,8 +5,6 @@ import { readCatalogMatches, readSearchCache, searchCacheKey, writeSearchCache }
 
 export const runtime = "nodejs";
 
-const VALID_GENDERS = new Set(["all", "men", "women", "kids", "unisex"]);
-
 function relevantToQuery(product: { title: string; subtitle?: string; styleCode?: string }, query: string) {
   const tokens = query.toLowerCase().match(/[a-z0-9]+/g)?.filter((token) => !["nike", "the", "and", "for", "with", "men", "mens", "women", "womens", "kids", "unisex", "size", "shoe", "shoes", "sneaker", "sneakers"].includes(token)) ?? [];
   if (!tokens.length) return true;
@@ -17,35 +15,34 @@ function relevantToQuery(product: { title: string; subtitle?: string; styleCode?
   const text = source.replace(/[^a-z0-9]+/g, " ");
   const uniqueTokens = [...new Set(tokens)];
   const matched = uniqueTokens.filter((token) => (` ${text} `).includes(` ${token} `)).length;
-  // Long model names are treated as an exact phrase search: every meaningful token
-  // must occur, so Nike's broad fallback recommendations do not pollute the results.
   return matched === uniqueTokens.length;
 }
 
 export async function GET(request: NextRequest) {
   const query = request.nextUrl.searchParams.get("q")?.trim();
-  const saleOnly = request.nextUrl.searchParams.get("sale") === "1";
-  const requestedGender = (request.nextUrl.searchParams.get("gender") ?? "all").toLowerCase();
-  const gender = VALID_GENDERS.has(requestedGender) ? requestedGender : "all";
-
   if (!query || query.length < 2) return NextResponse.json({ error: "Enter at least two characters to search." }, { status: 400 });
   if (query.length > 100) return NextResponse.json({ error: "Search text is too long." }, { status: 400 });
 
-  const cacheKey = searchCacheKey(query, saleOnly, gender);
+  const cacheKey = searchCacheKey(query);
   const cached = await readSearchCache(cacheKey);
   if (cached) {
+    const products = cached.products.map((item) => normalizeNikeProduct(item) ?? item).filter((item) => relevantToQuery(item, query));
     return NextResponse.json({
-      products: cached.products,
+      products,
       meta: { ...cached.meta, cached: true, cacheSource: "neon", fetchedAt: cached.cachedAt },
       source: "api.sh",
     });
   }
 
-  const catalogueMatches = (await readCatalogMatches(query, saleOnly, gender)).filter((item) => relevantToQuery(item, query));
+  // Reuse the shared catalogue before making a provider request. The audience and
+  // sale filters are intentionally not applied here; the client applies them locally.
+  const catalogueMatches = (await readCatalogMatches(query))
+    .map((item) => normalizeNikeProduct(item) ?? item)
+    .filter((item) => relevantToQuery(item, query));
   if (catalogueMatches.length) {
     return NextResponse.json({
-      products: catalogueMatches,
-      meta: { cached: true, cacheSource: "neon", fetchedAt: new Date().toISOString(), note: "Reused matching product records from the Neon catalogue." },
+      products: catalogueMatches.slice(0, 100),
+      meta: { cached: true, cacheSource: "neon", fetchedAt: new Date().toISOString(), note: "Reused the unfiltered product catalogue from Neon." },
       source: "api.sh",
     });
   }
@@ -55,35 +52,20 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const payload = await nikeApiRequest<unknown>("/nike/v1/search", {
-      q: query,
-      country: "US",
-      sale: saleOnly ? "1" : undefined,
-      // API.SH documents a gender filter for Nike search. Unisex is filtered locally
-      // because Nike may classify unisex styles across more than one audience.
-      gender: gender !== "all" && gender !== "unisex" ? gender[0].toUpperCase() + gender.slice(1) : undefined,
-    });
+    // Fetch the broadest product set once. Sale, gender, category and size are all
+    // client-side filters so toggling them never consumes another search credit.
+    const payload = await nikeApiRequest<unknown>("/nike/v1/search", { q: query, country: "US" });
     const root = payload as Record<string, unknown>;
     if (root && root.success === false) return NextResponse.json({ error: "The product provider could not complete this search." }, { status: 502 });
 
-    const normalized = productArray(payload)
+    const products = productArray(payload)
       .map(normalizeNikeProduct)
-      .filter((item): item is NonNullable<typeof item> => Boolean(item));
-    const products = normalized
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
       .filter((item) => relevantToQuery(item, query))
-      .map((item) => {
-        // For the provider's documented Men/Women/Kids filter, fill an omitted audience
-        // label from the selected source filter rather than dropping valid results.
-        if (["men", "women", "kids"].includes(gender) && item.gender === "Unknown") {
-          return { ...item, gender: (gender[0].toUpperCase() + gender.slice(1)) as typeof item.gender };
-        }
-        return item;
-      })
-      .filter((item) => gender === "all" || item.gender?.toLowerCase() === gender)
-      .slice(0, 48);
+      .slice(0, 100);
 
     const meta = providerMeta(payload);
-    await writeSearchCache(cacheKey, query, saleOnly, gender, products, meta);
+    await writeSearchCache(cacheKey, query, products, meta);
     return NextResponse.json({ products, meta: { ...meta, cached: false, cacheSource: "provider" }, source: "api.sh" });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected product search error.";
