@@ -15,7 +15,10 @@ export async function GET(request: NextRequest) {
   }
 
   const cached = await readProductCache(parsed.toString());
-  if (cached) return NextResponse.json({ product: cached.product, meta: { ...cached.meta, cached: true, cacheSource: "neon" }, sizeAvailabilityType: "online-shipping" });
+  if (cached) {
+    const normalized = normalizeNikeProduct(cached.product) ?? cached.product;
+    return NextResponse.json({ product: normalized, meta: { ...cached.meta, cached: true, cacheSource: "neon" }, sizeAvailabilityType: "online-shipping" });
+  }
 
   try {
     const payload = await nikeApiRequest<unknown>("/nike/v1/product", { url: parsed.toString() });
