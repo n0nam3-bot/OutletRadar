@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { normalizeNikeProduct, nikeApiRequest, productArray, providerMeta } from "@/lib/nike";
 import { allowSearch } from "@/lib/rate-limit";
 import { readCatalogMatches, readSearchCache, searchCacheKey, writeSearchCache } from "@/lib/search-cache";
+import { relevantToQuery } from "@/lib/search-match";
 
 export const runtime = "nodejs";
 
@@ -10,19 +11,6 @@ export const runtime = "nodejs";
 function asUnverifiedSearchProduct<T extends { sizes?: Array<{ label: string; localizedLabel?: string; status?: string | null; available?: boolean | null }> }>(product: T): T {
   if (!Array.isArray(product.sizes)) return product;
   return { ...product, sizes: product.sizes.map(({ label, localizedLabel }) => ({ label, localizedLabel, available: null, status: undefined })) } as T;
-}
-
-function relevantToQuery(product: { title: string; subtitle?: string; styleCode?: string }, query: string) {
-  const tokens = query.toLowerCase().match(/[a-z0-9]+/g)?.filter((token) => !["nike", "the", "and", "for", "with", "men", "mens", "women", "womens", "kids", "unisex", "size", "shoe", "shoes", "sneaker", "sneakers"].includes(token)) ?? [];
-  if (!tokens.length) return true;
-  const source = `${product.title} ${product.subtitle ?? ""} ${product.styleCode ?? ""}`.toLowerCase();
-  const compactQuery = query.toLowerCase().replace(/[^a-z0-9]+/g, "");
-  const compactSource = source.replace(/[^a-z0-9]+/g, "");
-  if (compactQuery.length >= 6 && compactSource.includes(compactQuery)) return true;
-  const text = source.replace(/[^a-z0-9]+/g, " ");
-  const uniqueTokens = [...new Set(tokens)];
-  const matched = uniqueTokens.filter((token) => (` ${text} `).includes(` ${token} `)).length;
-  return matched === uniqueTokens.length;
 }
 
 export async function GET(request: NextRequest) {
