@@ -3,7 +3,9 @@ import { getDb } from "@/lib/db";
 import type { NikeProduct } from "@/lib/types";
 
 const SEARCH_TTL_HOURS = 12;
-const PRODUCT_TTL_MINUTES = 5;
+// One-hour detail cache reduces repeat provider credits. The UI shows the check age and
+// availability becomes unverified once this cache expires.
+const PRODUCT_TTL_MINUTES = 60;
 
 // One base cache per model query. Gender, size, category and sale are deliberately
 // excluded so shoppers can change filters without another provider search call.
@@ -90,7 +92,7 @@ export async function readProductCache(productUrl: string) {
       FROM nike_product_detail_cache
       WHERE product_url = ${productUrl}
         AND expires_at > now()
-        AND cached_at > now() - interval '5 minutes'
+        AND cached_at > now() - interval '60 minutes'
       LIMIT 1
     ` as Array<Record<string, unknown>>;
     const row = rows[0];
@@ -138,7 +140,7 @@ export async function readCatalogMatches(query: string) {
         AND product_json->>'catalogVersion' = '2'
         AND (title ILIKE ${pattern} OR COALESCE(subtitle, '') ILIKE ${pattern} OR COALESCE(style_code, '') ILIKE ${pattern})
       ORDER BY updated_at DESC
-      LIMIT 100
+      LIMIT 1000
     ` as Array<{ product_json: unknown }>;
     return rows.flatMap((row) => {
       const value = typeof row.product_json === "string" ? JSON.parse(row.product_json) : row.product_json;
