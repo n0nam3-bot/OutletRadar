@@ -43,3 +43,65 @@ CREATE TABLE IF NOT EXISTS search_rate_limits (
   request_count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (ip_hash, usage_day)
 );
+
+-- Shared product cache: avoids spending a provider credit for the same search again.
+CREATE TABLE IF NOT EXISTS nike_search_cache (
+  cache_key CHAR(64) PRIMARY KEY,
+  query_text VARCHAR(120) NOT NULL,
+  sale_only BOOLEAN NOT NULL DEFAULT FALSE,
+  gender_filter VARCHAR(16) NOT NULL DEFAULT 'all',
+  products_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  meta_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  cached_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_nike_search_cache_expiry ON nike_search_cache (expires_at);
+
+-- Cached catalogue powers typeahead suggestions without making a paid API call per keystroke.
+CREATE TABLE IF NOT EXISTS nike_product_catalog (
+  product_url TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL,
+  title VARCHAR(220) NOT NULL,
+  subtitle TEXT,
+  style_code VARCHAR(100),
+  image_url TEXT,
+  current_price NUMERIC(10,2),
+  full_price NUMERIC(10,2),
+  discount_percent INTEGER,
+  currency VARCHAR(8) NOT NULL DEFAULT 'USD',
+  product_gender VARCHAR(16) NOT NULL DEFAULT 'Unknown',
+  product_category VARCHAR(24) NOT NULL DEFAULT 'Other',
+  product_json JSONB NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_nike_product_catalog_title ON nike_product_catalog (lower(title));
+CREATE INDEX IF NOT EXISTS idx_nike_product_catalog_style ON nike_product_catalog (lower(style_code));
+
+-- Cached product details include online sizes, not store-specific inventory.
+CREATE TABLE IF NOT EXISTS nike_product_detail_cache (
+  product_url TEXT PRIMARY KEY,
+  product_json JSONB NOT NULL,
+  meta_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  cached_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_nike_product_detail_cache_expiry ON nike_product_detail_cache (expires_at);
+
+-- Cached nearby Nike store locations by ZIP and requested radius.
+CREATE TABLE IF NOT EXISTS nike_store_search_cache (
+  zip_code CHAR(5) NOT NULL,
+  radius_miles INTEGER NOT NULL,
+  latitude DOUBLE PRECISION NOT NULL,
+  longitude DOUBLE PRECISION NOT NULL,
+  stores_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  cached_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (zip_code, radius_miles)
+);
+
+
+ALTER TABLE watched_products ADD COLUMN IF NOT EXISTS product_gender VARCHAR(16) NOT NULL DEFAULT 'Unknown';
+ALTER TABLE watched_products ADD COLUMN IF NOT EXISTS product_category VARCHAR(24) NOT NULL DEFAULT 'Other';
