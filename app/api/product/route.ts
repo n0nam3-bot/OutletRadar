@@ -14,10 +14,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Only official Nike product links are supported." }, { status: 400 });
   }
 
-  const cached = await readProductCache(parsed.toString());
+  const forceRefresh = request.nextUrl.searchParams.get("refresh") === "1";
+  const cached = forceRefresh ? null : await readProductCache(parsed.toString());
   if (cached) {
     const normalized = normalizeNikeProduct(cached.product) ?? cached.product;
-    return NextResponse.json({ product: normalized, meta: { ...cached.meta, cached: true, cacheSource: "neon" }, sizeAvailabilityType: "online-shipping" });
+    return NextResponse.json({
+      product: normalized,
+      meta: { ...cached.meta, cached: true, cacheSource: "neon", checkedAt: cached.cachedAt },
+      sizeAvailabilityType: "online-shipping",
+    });
   }
 
   try {
@@ -29,7 +34,11 @@ export async function GET(request: NextRequest) {
     if (!product) return NextResponse.json({ error: "Product details were returned in an unsupported format." }, { status: 502 });
     const meta = providerMeta(payload);
     await writeProductCache(parsed.toString(), product, meta);
-    return NextResponse.json({ product, meta: { ...meta, cached: false, cacheSource: "provider" }, sizeAvailabilityType: "online-shipping" });
+    return NextResponse.json({
+      product,
+      meta: { ...meta, cached: false, cacheSource: "provider", checkedAt: new Date().toISOString() },
+      sizeAvailabilityType: "online-shipping",
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected product lookup error.";
     return NextResponse.json({ error: message }, { status: /not configured/i.test(message) ? 503 : 502 });
