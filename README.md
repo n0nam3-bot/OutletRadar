@@ -1,4 +1,4 @@
-# Outlet Radar — Nike Clearance Finder v1.5
+# Outlet Radar — Nike Clearance Finder v1.6
 
 A product-first Nike deal finder built with Next.js, Vercel, and Neon Postgres. Search the US Nike catalog once per model query, then narrow the saved result set locally by audience, size, category, sale status and price order. Save products, keep daily price history, and open the Nike listing when you need to check its official pickup options.
 
@@ -14,10 +14,10 @@ This is an independent tool and is not affiliated with or endorsed by Nike, Inc.
 - Product image, style code, current price, original price, markdown percentage, audience and online size data when returned by the provider.
 - Relevance-filtered search: meaningful search terms must match the returned product title/description/style code, reducing unrelated Nike fallback listings.
 - Product suggestions from the Neon catalogue as the user types. Typeahead reads Neon only and does not make paid API requests; a new product appears in suggestions after its first successful search is cached.
-- Men, Women, Kids / Youth, and Unisex audience filters; product type, free-entry size filter, sale-only and sort filters are visible before search and also update results after search. Youth sizing is kept separate from adult sizing (for example, 5Y does not equal adult 5). When a size is entered, the app checks up to 10 audience/category/sale-matching products per batch if that requested size is missing or its availability status is unknown; product detail responses are cached in Neon for 5 minutes.
+- Men, Women, Kids / Youth, and Unisex audience filters; product type, free-entry size filter, sale-only and sort filters are visible before search and also update results after search. Youth sizing is kept separate from adult sizing (for example, 5Y does not equal adult 5). Size filtering is local and does not automatically trigger paid product-detail calls. The shopper explicitly checks sizes one product at a time; product detail responses are cached in Neon for one hour to reduce repeat API usage, and the UI shows the age of the provider check.
 - ZIP-code store locator with 5, 10, 25, 50, or 100-mile distance filters and store cards sorted by distance.
 - Product-specific **Open product page** handoff. This does not claim that a selected size is available or that a store has the item.
-- Persistent Neon caching: the unfiltered base result for an identical model query is reused for 12 hours regardless of audience, size, category or sale filters; product details and online size data are reused for 5 minutes; nearby store locations are reused for 24 hours. The catalogue uses a version marker so partially filtered records created by v1.1 are not mistaken for complete v1.3 catalogues.
+- Persistent Neon caching: the unfiltered base result for an identical model query is reused for 12 hours regardless of audience, size, category or sale filters; product details and online size data are reused for one hour; nearby store locations are reused for 24 hours. The catalogue uses a version marker so partially filtered records created by v1.1 are not mistaken for complete v1.3 catalogues.
 - Save products to a browser watchlist; Neon persistence is enabled when `DATABASE_URL` is configured and `db/schema.sql` has been run.
 - Daily price history refresh for up to 10 saved product links per day through Vercel Cron (requires `API_SH_KEY`, `DATABASE_URL`, and `CRON_SECRET`).
 - No user account or personal information is required. The watchlist uses a random browser-generated visitor ID; clearing browser storage loses the local watchlist unless the database is configured and that visitor ID is retained.
@@ -29,7 +29,7 @@ This is an independent tool and is not affiliated with or endorsed by Nike, Inc.
 - Search filters are displayed with the search controls so they can be chosen before submitting, then changed without repeating the search.
 - Youth markers such as Big Kids, Grade School, GS, Little Kids, Preschool and Y sizing take priority over inconsistent broad gender metadata.
 - Size filtering distinguishes `5` from `5Y`; shared Nike labels such as `M 6 / W 7.5` are interpreted using the selected audience.
-- Size detail lookups are only initiated when a size filter is entered (up to 10 matching products per batch); users can explicitly request the next batch. Each product detail is then reused from Neon for 5 minutes.
+- Size detail lookups are not automatic. The shopper explicitly checks one product at a time, avoiding a burst of up to 10 paid provider calls from simply entering a size. Each product detail is reused from Neon for one hour; a manual refresh can bypass the cache.
 - Removed the misleading “Select this exact product” card control and renamed the Nike link to “Open product page”.
 - Old v1.1 catalogue rows are ignored as base search results because they may have been stored with audience/sale filters already applied. They are retained in Neon, not deleted.
 
@@ -56,7 +56,7 @@ This is an independent tool and is not affiliated with or endorsed by Nike, Inc.
 2. Create an API key.
 3. Add it to Vercel as `API_SH_KEY` (or copy it to `.env.local` for local development).
 
-API.SH currently lists one credit per Nike search and product-detail call. Free-credit allowances and pricing are subject to provider changes; check your current API.SH dashboard for the exact quota. The app limits its daily background refresh to 10 product calls. Neon caching avoids repeated model searches and detail lookups. When a shopper uses a size filter, up to 10 matching products may each need a one-time product-detail request to obtain size data; those detail responses are then cached for 5 minutes.
+API.SH currently lists one credit per Nike search and product-detail call. Free-credit allowances and pricing are subject to provider changes; check your current API.SH dashboard for the exact quota. The app limits its daily background refresh to 10 product calls. Neon caching avoids repeated model searches and detail lookups. Entering a size filter does not make a provider call. The shopper requests size details per product, and each successful detail response is cached for one hour. This limits provider calls and makes the check cost explicit.
 
 ### 2. Connect Neon
 
@@ -168,7 +168,17 @@ Starter code is provided for personal experimentation. Product data is supplied 
 
 - Search and typeahead results retain size labels but do not present search-index availability as confirmed stock.
 - A selected-size check uses the product-detail endpoint and the provider's per-size online shipping status.
-- Product-detail availability cache lifetime is five minutes. Old Neon rows with longer previous expirations are ignored if their `cached_at` time is more than five minutes old.
-- The product card provides **Refresh sizes** to bypass the Neon detail cache and request a fresh provider lookup.
+- Product-detail availability cache lifetime is one hour. Old Neon rows are ignored when their one-hour cache lifetime expires.
+- The product card provides **Check sizes** to use a still-fresh Neon cache entry or make a single product-detail request. After a check, **Refresh sizes** bypasses the cache.
 - Explicit `OOS`/sold-out status overrides any contradictory positive `available` flag.
 - This is online shipping availability reported by API.SH, not Nike store pickup or clearance-floor inventory. Nike's page remains the final check when a provider response disagrees.
+
+
+## Version 1.6 changes
+
+- Exact model token matching replaces compact substring matching. Numeric model identifiers must match as whole tokens, so `Air Jordan 1` cannot match `Air Jordan 14`.
+- The same strict matcher is used for live search results, Neon-catalogue reuse and typeahead suggestions.
+- Size filtering no longer triggers automatic batches of paid product-detail requests. The shopper checks one product at a time.
+- Product-detail availability is cached for one hour in Neon to reduce repeated API credits.
+- The page re-renders every 30 seconds so availability status becomes unverified when its one-hour freshness window expires, even if the page remains open.
+- Product cards show the age of the latest availability check.
