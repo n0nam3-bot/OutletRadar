@@ -74,20 +74,26 @@ function sizeMatches(size: ProductSize, requested: string, gender?: NikeProduct[
   return tokenPattern.test(label) || tokenPattern.test(localized);
 }
 
+const SIZE_STATUS_TTL_MS = 5 * 60 * 1000;
+
 function needsSizeLookup(
   product: NikeProduct,
   requestedSize: string,
   cachedDetails: Record<string, ProductSize[]>,
+  checkedAt: Record<string, number>,
   attempted: Set<string>,
-  audience: NikeProduct["gender"] = product.gender,
 ) {
-  if (cachedDetails[product.url] !== undefined || attempted.has(product.url)) return false;
-  const knownSizes = product.sizes ?? [];
-  if (!knownSizes.length) return true;
-  const matches = knownSizes.filter((size) => sizeMatches(size, requestedSize, audience));
-  // A listing can contain labels without a stock status. Fetch the detail once when
-  // the requested size is absent or its status is unknown; reuse that cached response.
-  return matches.length === 0 || matches.every((size) => size.available == null);
+  const checked = checkedAt[product.url];
+  if (cachedDetails[product.url] !== undefined && checked && Date.now() - checked < SIZE_STATUS_TTL_MS) return false;
+  return !attempted.has(product.url);
+}
+
+function sizesForDisplay(product: NikeProduct, details: Record<string, ProductSize[]>, checkedAt: Record<string, number>) {
+  const values = details[product.url] ?? product.sizes ?? [];
+  const checked = checkedAt[product.url];
+  if (checked && Date.now() - checked < SIZE_STATUS_TTL_MS) return values;
+  // Do not keep showing a stale positive or negative inventory state after five minutes.
+  return values.map(({ label, localizedLabel }) => ({ label, localizedLabel, available: null, status: "Refresh required" }));
 }
 
 function getVisitorId() {
@@ -145,6 +151,7 @@ export default function Home() {
   const [sizeLookupLoading, setSizeLookupLoading] = useState(false);
   const [sizeCheckBatch, setSizeCheckBatch] = useState(0);
   const [sizeDetails, setSizeDetails] = useState<Record<string, ProductSize[]>>({});
+  const [sizeDetailsCheckedAt, setSizeDetailsCheckedAt] = useState<Record<string, number>>({});
   const sizeFetchAttemptsRef = useRef<Set<string>>(new Set());
   const autoSizeChecksRef = useRef<Set<string>>(new Set());
 
@@ -207,28 +214,28 @@ export default function Home() {
     const requestedSize = sizeFilter.trim();
     if (requestedSize) {
       filtered = filtered.filter((product) => {
-        const sizes = sizeDetails[product.url] ?? product.sizes ?? [];
+        const sizes = sizesForDisplay(product, sizeDetails, sizeDetailsCheckedAt);
         return sizes.some((size) => sizeMatches(size, requestedSize, audienceOf(product)) && size.available !== false);
       });
     }
     if (sortBy === "price-low") filtered = [...filtered].sort((a, b) => (a.price ?? Number.MAX_SAFE_INTEGER) - (b.price ?? Number.MAX_SAFE_INTEGER));
     if (sortBy === "discount") filtered = [...filtered].sort((a, b) => (b.discountPercent ?? 0) - (a.discountPercent ?? 0));
     return filtered;
-  }, [category, genderFilter, products, saved, saleOnly, selectedProductUrl, sizeDetails, sizeFilter, sortBy, tab]);
+  }, [category, genderFilter, products, saved, saleOnly, selectedProductUrl, sizeDetails, sizeDetailsCheckedAt, sizeFilter, sortBy, tab]);
 
   const sizeOptions = useMemo(() => {
     const base = tab === "saved" ? saved : products;
-    const labels = base.flatMap((product) => (sizeDetails[product.url] ?? product.sizes ?? []).map((size) => size.label));
+    const labels = base.flatMap((product) => sizesForDisplay(product, sizeDetails, sizeDetailsCheckedAt).map((size) => size.label));
     return [...new Set(labels)].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  }, [products, saved, sizeDetails, tab]);
+  }, [products, saved, sizeDetails, sizeDetailsCheckedAt, tab]);
 
   const hasMoreSizeCandidates = useMemo(() => products.some((product) => {
     if (category !== "All" && categoryOf(product) !== category) return false;
     const audience = audienceOf(product);
     if (genderFilter !== "all" && audience.toLowerCase() !== genderFilter) return false;
     if (saleOnly && !productIsOnSale(product)) return false;
-    return needsSizeLookup(product, sizeFilter, sizeDetails, sizeFetchAttemptsRef.current, audience);
-  }), [category, genderFilter, products, saleOnly, sizeDetails, sizeFilter]);
+    return needsSizeLookup(product, sizeFilter, sizeDetails, sizeDetailsCheckedAt, sizeFetchAttemptsRef.current);
+  }), [category, genderFilter, products, saleOnly, sizeDetails, sizeDetailsCheckedAt, sizeFilter]);
 
   function checkNextSizeBatch() {
     autoSizeChecksRef.current.clear();
@@ -247,6 +254,9 @@ export default function Home() {
     setError("");
     setMessage("");
     autoSizeChecksRef.current.clear();
+    sizeFetchAttemptsRef.current.clear();
+    setSizeDetails({});
+    setSizeDetailsCheckedAt({});
     setSelectedProductUrl("");
     setSuggestionsOpen(false);
     try {
@@ -273,6 +283,9 @@ export default function Home() {
     setSearchStatus("success");
     setProviderMeta({ cached: true, cacheSource: "neon" });
     autoSizeChecksRef.current.clear();
+    sizeFetchAttemptsRef.current.clear();
+    setSizeDetails({});
+    setSizeDetailsCheckedAt({});
     setSuggestionsOpen(false);
     setError("");
   }
@@ -327,16 +340,35 @@ export default function Home() {
     window.setTimeout(() => setMessage(""), 3500);
   }
 
-  const loadSizes = useCallback(async (product: NikeProduct, quiet = false) => {
-    if (sizeDetails[product.url]?.length || sizeFetchAttemptsRef.current.has(product.url)) return;
+  const loadSizes = useCallback(async (product: NikeProduct, quiet = false, forceRefresh = false) => {
+    const lastChecked = sizeDetailsCheckedAt[product.url];
+    const detailsAreFresh = lastChecked !== undefined && Date.now() - lastChecked < SIZE_STATUS_TTL_MS;
+    if (!forceRefresh && sizeDetails[product.url] !== undefined && detailsAreFresh) return;
+    if (!forceRefresh && sizeFetchAttemptsRef.current.has(product.url)) return;
     sizeFetchAttemptsRef.current.add(product.url);
+    if (forceRefresh) {
+      // Remove the old positive signal while the fresh check is in flight.
+      setSizeDetails((current) => ({
+        ...current,
+        [product.url]: (current[product.url] ?? product.sizes ?? []).map((size) => ({
+          ...size, available: null, status: "Refreshing availability",
+        })),
+      }));
+    }
     if (!quiet) setLoadingSizes(product.url);
     try {
-      const response = await fetch(`/api/product?url=${encodeURIComponent(product.url)}`);
+      const refreshParam = forceRefresh ? "&refresh=1" : "";
+      const response = await fetch(`/api/product?url=${encodeURIComponent(product.url)}${refreshParam}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Could not load sizes.");
       const sizes = Array.isArray(data.product?.sizes) ? data.product.sizes : [];
       if (sizes.length) setSizeDetails((current) => ({ ...current, [product.url]: sizes }));
+      else setSizeDetails((current) => ({ ...current, [product.url]: [] }));
+      const sourceCheckedAt = data.meta?.checkedAt ? Date.parse(data.meta.checkedAt) : Number.NaN;
+      setSizeDetailsCheckedAt((current) => ({
+        ...current,
+        [product.url]: Number.isFinite(sourceCheckedAt) ? sourceCheckedAt : Date.now(),
+      }));
       if (data.product && typeof data.product === "object") {
         const mergeDetails = (item: NikeProduct): NikeProduct => ({
           ...item,
@@ -347,21 +379,31 @@ export default function Home() {
         setProducts((current) => current.map((item) => item.url === product.url ? mergeDetails(item) : item));
         setSaved((current) => current.map((item) => item.url === product.url ? mergeDetails(item) : item));
       }
-      if (!quiet && !sizes.length) setMessage("Nike returned no size-level data for this listing. The selected size cannot be verified.");
+      if (!quiet && !sizes.length) setMessage("Nike product details returned no size-level inventory data. Availability is unverified.");
+      if (!quiet && data.meta?.cacheSource === "neon") setMessage("Showing a recent availability check from the last five minutes. Use Refresh sizes to force a new provider lookup.");
     } catch (caught) {
       sizeFetchAttemptsRef.current.delete(product.url);
+      if (forceRefresh) {
+        setSizeDetails((current) => ({
+          ...current,
+          [product.url]: (current[product.url] ?? product.sizes ?? []).map((size) => ({
+            ...size, available: null, status: "Refresh failed; not verified",
+          })),
+        }));
+        setSizeDetailsCheckedAt((current) => ({ ...current, [product.url]: Date.now() }));
+      }
       if (!quiet) setMessage(caught instanceof Error ? caught.message : "Could not load sizes.");
     } finally {
+      sizeFetchAttemptsRef.current.delete(product.url);
       if (!quiet) {
         setLoadingSizes(null);
         window.setTimeout(() => setMessage(""), 4500);
       }
     }
-  }, [sizeDetails]);
+  }, [sizeDetails, sizeDetailsCheckedAt]);
 
-  // When a size is entered before or after the search, check only the first 10
-  // audience/category/sale-matching products that lack size details. Product details
-  // are cached in Neon, so subsequent size changes reuse the same data.
+  // When a size is entered, verify matching audience/category/sale candidates against
+  // product-detail inventory. Product details are cached in Neon for five minutes.
   useEffect(() => {
     if (!sizeFilter.trim() || searchStatus !== "success" || tab !== "search") {
       setSizeLookupLoading(false);
@@ -375,7 +417,7 @@ export default function Home() {
         const audience = audienceOf(product);
         if (genderFilter !== "all" && audience.toLowerCase() !== genderFilter) return false;
         if (saleOnly && !productIsOnSale(product)) return false;
-        return needsSizeLookup(product, sizeFilter, sizeDetails, sizeFetchAttemptsRef.current, audience) && !autoSizeChecksRef.current.has(product.url);
+        return needsSizeLookup(product, sizeFilter, sizeDetails, sizeDetailsCheckedAt, sizeFetchAttemptsRef.current) && !autoSizeChecksRef.current.has(product.url);
       }).slice(0, remainingAutoChecks);
       candidates.forEach((product) => autoSizeChecksRef.current.add(product.url));
       if (candidates.length) {
@@ -385,7 +427,7 @@ export default function Home() {
       }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [category, genderFilter, loadSizes, products, saleOnly, searchStatus, sizeCheckBatch, sizeDetails, sizeFilter, tab]);
+  }, [category, genderFilter, loadSizes, products, saleOnly, searchStatus, sizeCheckBatch, sizeDetails, sizeDetailsCheckedAt, sizeFilter, tab]);
 
   function pickupUrl(product: NikeProduct) {
     return product.url;
@@ -447,7 +489,7 @@ export default function Home() {
             <label className="search-filter-field"><span>PRODUCT TYPE</span><select value={category} onChange={(event) => setCategory(event.target.value as Category)}>{CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <button type="button" className={`sale-toggle search-sale-toggle ${saleOnly ? "sale-toggle-active" : ""}`} onClick={() => setSaleOnly((value) => !value)}><Tag size={15} /> Sale items only <span className="toggle-switch"><span /></span></button>
           </div>
-          {sizeFilter.trim() && <div className="size-filter-foot"><p className="size-filter-note">Size matching uses each product's own sizing system. Youth 5Y is kept separate from adult 5. Up to 10 products are checked per batch; the first detail request for a product is cached in Neon for 18 hours. {sizeLookupLoading ? "Checking online size details…" : ""}</p>{!sizeLookupLoading && autoSizeChecksRef.current.size > 0 && hasMoreSizeCandidates && <button type="button" className="size-more-button" onClick={checkNextSizeBatch}>Check next 10 products for this size</button>}</div>}
+          {sizeFilter.trim() && <div className="size-filter-foot"><p className="size-filter-note">Size matching uses each product's own sizing system. Youth 5Y is kept separate from adult 5. Up to 10 products are checked per batch; product-detail availability checks are cached in Neon for up to five minutes. {sizeLookupLoading ? "Checking online size details…" : ""}</p>{!sizeLookupLoading && autoSizeChecksRef.current.size > 0 && hasMoreSizeCandidates && <button type="button" className="size-more-button" onClick={checkNextSizeBatch}>Check next 10 products for this size</button>}</div>}
         </div>
         <div className="search-controls"><div className="suggested"><span className="control-label">QUICK SEARCH</span>{SUGGESTED_SEARCHES.map((term) => <button type="button" className="suggestion" key={term} onClick={() => { setQuery(term); void runSearch(term); }}>{term}</button>)}</div></div>
         <div className="location-strip">
@@ -490,7 +532,7 @@ export default function Home() {
         {visibleProducts.length > 0 && <div className="product-grid">
           {visibleProducts.map((product, index) => {
             const isSaved = savedUrls.has(product.url);
-            const sizes = sizeDetails[product.url] ?? product.sizes ?? [];
+            const sizes = sizesForDisplay(product, sizeDetails, sizeDetailsCheckedAt);
             const hasDiscount = productIsOnSale(product);
             return <article className="product-card" key={product.url}>
               <div className="product-image-wrap">
@@ -504,18 +546,18 @@ export default function Home() {
                 <h3>{product.title}</h3>
                 {product.subtitle && <p className="product-subtitle">{product.subtitle}</p>}
                 <div className="price-row"><strong>{money(product.price, product.currency)}</strong>{product.fullPrice && product.price && product.fullPrice > product.price && <><del>{money(product.fullPrice, product.currency)}</del><span className="savings">Save {money(product.fullPrice - product.price, product.currency)}</span></>}</div>
-                {sizes.length > 0 && <div className="size-list"><span>ONLINE SIZE DATA · GREEN AVAILABLE · STRUCK THROUGH UNAVAILABLE · GRAY UNVERIFIED</span><div>{sizes.slice(0, 7).map((size, sizeIndex) => <span key={`${size.label}-${sizeIndex}`} className={size.available === true ? "size-available" : size.available === false ? "size-unavailable" : "size-unverified"} title={size.available === true ? `${size.label}: online shipping marked available` : size.available === false ? `${size.label}: online shipping marked unavailable` : `${size.label}: size listed, stock status not verified${size.status ? ` (source status: ${size.status})` : ""}`}>{size.label}</span>)}{sizes.length > 7 && <small>+{sizes.length - 7}</small>}</div></div>}
+                {sizes.length > 0 && <div className="size-list"><span>ONLINE SIZE STATUS · GREEN PROVIDER REPORTS AVAILABLE · STRUCK THROUGH UNAVAILABLE · GRAY UNVERIFIED</span><div>{sizes.slice(0, 7).map((size, sizeIndex) => <span key={`${size.label}-${sizeIndex}`} className={size.available === true ? "size-available" : size.available === false ? "size-unavailable" : "size-unverified"} title={size.available === true ? `${size.label}: online shipping marked available` : size.available === false ? `${size.label}: online shipping marked unavailable` : `${size.label}: size listed, stock status not verified${size.status ? ` (source status: ${size.status})` : ""}`}>{size.label}</span>)}{sizes.length > 7 && <small>+{sizes.length - 7}</small>}</div></div>}
                 <div className="product-actions">
                   <a className="pickup-button" href={pickupUrl(product)} target="_blank" rel="noreferrer"><ExternalLink size={13} /> Open product page</a>
-                  <button className="sizes-button" onClick={() => void loadSizes(product)} disabled={loadingSizes === product.url}>{loadingSizes === product.url ? <span className="mini-spinner" /> : <ArrowDownUp size={14} />} Sizes</button>
+                  <button className="sizes-button" onClick={() => void loadSizes(product, false, true)} disabled={loadingSizes === product.url}>{loadingSizes === product.url ? <span className="mini-spinner" /> : <ArrowDownUp size={14} />} Refresh sizes</button>
                 </div>
-                <div className="availability-note"><ShieldCheck size={13} /><span>{sizeFilter.trim() ? (() => { const match = sizes.find((size) => sizeMatches(size, sizeFilter, audienceOf(product))); return match?.available === true ? `Nike online shipping: size ${match.label} marked available · store pickup not checked` : match?.available === false ? `Nike online shipping: size ${match.label} marked unavailable` : match ? `Size ${match.label} is listed, but online stock is unverified${match.status ? ` (source status: ${match.status})` : ""} · store pickup not checked` : `No ${sizeFilter} size entry was returned for this product · availability not confirmed`; })() : "Size options are not the same as stock. Only explicit online inventory signals are marked available; store pickup is not checked."}</span></div>
+                <div className="availability-note"><ShieldCheck size={13} /><span>{sizeFilter.trim() ? (() => { const match = sizes.find((size) => sizeMatches(size, sizeFilter, audienceOf(product))); return match?.available === true ? `Provider reports online shipping available for size ${match.label} · store pickup not checked` : match?.available === false ? `Nike online shipping: size ${match.label} marked unavailable` : match ? `Size ${match.label} is listed, but online stock is unverified${match.status ? ` (source status: ${match.status})` : ""} · store pickup not checked` : `No ${sizeFilter} size entry was returned for this product · availability not confirmed`; })() : "Size options are not the same as stock. Search results only list sizes; product details are checked before a size is marked available. Store pickup is not checked."}</span></div>
               </div>
             </article>;
           })}
         </div>}
 
-        {tab === "search" && searchStatus === "success" && products.length > 0 && <div className="bottom-note"><Sparkles size={15} /><span>One unfiltered product search is cached in Neon. Gender, size and sale-only changes are applied locally without repeating the search. Nike size status reflects online availability only, not store pickup inventory.</span></div>}
+        {tab === "search" && searchStatus === "success" && products.length > 0 && <div className="bottom-note"><Sparkles size={15} /><span>One unfiltered product search is cached in Neon. Gender, size and sale-only changes are applied locally without repeating the search. Size availability is refreshed from product details and cached for five minutes; it is not store pickup inventory.</span></div>}
       </section>
 
       <section className="how-it-works">
