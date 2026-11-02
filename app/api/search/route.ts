@@ -5,6 +5,13 @@ import { readCatalogMatches, readSearchCache, searchCacheKey, writeSearchCache }
 
 export const runtime = "nodejs";
 
+// Search results are discovery data, not an inventory check. Keep size labels for
+// filtering, but require a product-detail request before showing a size as available.
+function asUnverifiedSearchProduct<T extends { sizes?: Array<{ label: string; localizedLabel?: string; status?: string | null; available?: boolean | null }> }>(product: T): T {
+  if (!Array.isArray(product.sizes)) return product;
+  return { ...product, sizes: product.sizes.map(({ label, localizedLabel }) => ({ label, localizedLabel, available: null, status: undefined })) } as T;
+}
+
 function relevantToQuery(product: { title: string; subtitle?: string; styleCode?: string }, query: string) {
   const tokens = query.toLowerCase().match(/[a-z0-9]+/g)?.filter((token) => !["nike", "the", "and", "for", "with", "men", "mens", "women", "womens", "kids", "unisex", "size", "shoe", "shoes", "sneaker", "sneakers"].includes(token)) ?? [];
   if (!tokens.length) return true;
@@ -26,7 +33,7 @@ export async function GET(request: NextRequest) {
   const cacheKey = searchCacheKey(query);
   const cached = await readSearchCache(cacheKey);
   if (cached) {
-    const products = cached.products.map((item) => normalizeNikeProduct(item) ?? item).filter((item) => relevantToQuery(item, query));
+    const products = cached.products.map((item) => normalizeNikeProduct(item) ?? item).filter((item) => relevantToQuery(item, query)).map(asUnverifiedSearchProduct);
     return NextResponse.json({
       products,
       meta: { ...cached.meta, cached: true, cacheSource: "neon", fetchedAt: cached.cachedAt },
@@ -38,7 +45,8 @@ export async function GET(request: NextRequest) {
   // sale filters are intentionally not applied here; the client applies them locally.
   const catalogueMatches = (await readCatalogMatches(query))
     .map((item) => normalizeNikeProduct(item) ?? item)
-    .filter((item) => relevantToQuery(item, query));
+    .filter((item) => relevantToQuery(item, query))
+    .map(asUnverifiedSearchProduct);
   if (catalogueMatches.length) {
     return NextResponse.json({
       products: catalogueMatches.slice(0, 100),
@@ -62,6 +70,7 @@ export async function GET(request: NextRequest) {
       .map(normalizeNikeProduct)
       .filter((item): item is NonNullable<typeof item> => Boolean(item))
       .filter((item) => relevantToQuery(item, query))
+      .map(asUnverifiedSearchProduct)
       .slice(0, 100);
 
     const meta = providerMeta(payload);
