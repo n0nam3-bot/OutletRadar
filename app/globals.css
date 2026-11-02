@@ -44,3 +44,10 @@
 .size-more-button{flex:none;border:1px solid #dfe7d6;background:#f7faf3;color:#536c3a;padding:8px 10px;font:9px var(--mono);}
 .size-more-button:hover{background:#eff6e6;border-color:#c9d8b7;}
 @media(max-width:760px){.size-filter-foot{align-items:flex-start;flex-direction:column;}.size-more-button{width:100%;}}
+
+/* v1.4: distinguish sizes explicitly marked available from unverified catalog options. */
+.size-list>div .size-available{background:#eef7e4;border-color:#d3e6bf;color:#4e702d;}
+.size-list>div .size-unavailable{color:#b1b7b0;text-decoration:line-through;background:#f5f6f4;border-color:#e5eae3;}
+.size-list>div .size-unverified{background:#fafbf9;border:1px dashed #cbd2c7;color:#788173;}
+.size-list>span{line-height:1.55;display:block;}
+.availability-note{align-items:flex-start;line-height:1.45;}

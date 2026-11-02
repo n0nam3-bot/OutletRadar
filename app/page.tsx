@@ -31,6 +31,18 @@ function categoryOf(product: NikeProduct): Exclude<Category, "All"> {
   return "Other";
 }
 
+function audienceOf(product: NikeProduct): NonNullable<NikeProduct["gender"]> {
+  const descriptor = `${product.title} ${product.subtitle ?? ""}`.toLowerCase();
+  if (/\b(big kids?|grade school|gs|little kids?|preschool|ps|toddler|infant|youth|kids?|boys?|girls?)\b/.test(descriptor) ||
+      (product.sizes ?? []).some((size) => /\d+(?:\.\d+)?\s*y\b/i.test(`${size.label} ${size.localizedLabel ?? ""}`))) return "Kids";
+  const men = /\bmen(?:['’]s)?\b/.test(descriptor);
+  const women = /\bwomen(?:['’]s)?\b/.test(descriptor);
+  if (men && women) return "Unisex";
+  if (men) return "Men";
+  if (women) return "Women";
+  return product.gender ?? "Unknown";
+}
+
 function productIsOnSale(product: NikeProduct) {
   return product.onSale === true || (product.discountPercent ?? 0) > 0 ||
     (product.price !== undefined && product.fullPrice !== undefined && product.fullPrice > product.price);
@@ -67,11 +79,12 @@ function needsSizeLookup(
   requestedSize: string,
   cachedDetails: Record<string, ProductSize[]>,
   attempted: Set<string>,
+  audience: NikeProduct["gender"] = product.gender,
 ) {
   if (cachedDetails[product.url] !== undefined || attempted.has(product.url)) return false;
   const knownSizes = product.sizes ?? [];
   if (!knownSizes.length) return true;
-  const matches = knownSizes.filter((size) => sizeMatches(size, requestedSize, product.gender));
+  const matches = knownSizes.filter((size) => sizeMatches(size, requestedSize, audience));
   // A listing can contain labels without a stock status. Fetch the detail once when
   // the requested size is absent or its status is unknown; reuse that cached response.
   return matches.length === 0 || matches.every((size) => size.available == null);
@@ -189,13 +202,13 @@ export default function Home() {
     let base = tab === "saved" ? saved : products;
     if (tab === "search" && selectedProductUrl) base = base.filter((product) => product.url === selectedProductUrl);
     let filtered = base.filter((product) => category === "All" || categoryOf(product) === category);
-    if (genderFilter !== "all") filtered = filtered.filter((product) => product.gender?.toLowerCase() === genderFilter);
+    if (genderFilter !== "all") filtered = filtered.filter((product) => audienceOf(product).toLowerCase() === genderFilter);
     if (saleOnly) filtered = filtered.filter(productIsOnSale);
     const requestedSize = sizeFilter.trim();
     if (requestedSize) {
       filtered = filtered.filter((product) => {
         const sizes = sizeDetails[product.url] ?? product.sizes ?? [];
-        return sizes.some((size) => sizeMatches(size, requestedSize, product.gender) && size.available !== false);
+        return sizes.some((size) => sizeMatches(size, requestedSize, audienceOf(product)) && size.available !== false);
       });
     }
     if (sortBy === "price-low") filtered = [...filtered].sort((a, b) => (a.price ?? Number.MAX_SAFE_INTEGER) - (b.price ?? Number.MAX_SAFE_INTEGER));
@@ -211,9 +224,10 @@ export default function Home() {
 
   const hasMoreSizeCandidates = useMemo(() => products.some((product) => {
     if (category !== "All" && categoryOf(product) !== category) return false;
-    if (genderFilter !== "all" && product.gender?.toLowerCase() !== genderFilter) return false;
+    const audience = audienceOf(product);
+    if (genderFilter !== "all" && audience.toLowerCase() !== genderFilter) return false;
     if (saleOnly && !productIsOnSale(product)) return false;
-    return needsSizeLookup(product, sizeFilter, sizeDetails, sizeFetchAttemptsRef.current);
+    return needsSizeLookup(product, sizeFilter, sizeDetails, sizeFetchAttemptsRef.current, audience);
   }), [category, genderFilter, products, saleOnly, sizeDetails, sizeFilter]);
 
   function checkNextSizeBatch() {
@@ -322,7 +336,7 @@ export default function Home() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Could not load sizes.");
       const sizes = Array.isArray(data.product?.sizes) ? data.product.sizes : [];
-      setSizeDetails((current) => ({ ...current, [product.url]: sizes }));
+      if (sizes.length) setSizeDetails((current) => ({ ...current, [product.url]: sizes }));
       if (data.product && typeof data.product === "object") {
         const mergeDetails = (item: NikeProduct): NikeProduct => ({
           ...item,
@@ -358,9 +372,10 @@ export default function Home() {
       if (!remainingAutoChecks) return;
       const candidates = products.filter((product) => {
         if (category !== "All" && categoryOf(product) !== category) return false;
-        if (genderFilter !== "all" && product.gender?.toLowerCase() !== genderFilter) return false;
+        const audience = audienceOf(product);
+        if (genderFilter !== "all" && audience.toLowerCase() !== genderFilter) return false;
         if (saleOnly && !productIsOnSale(product)) return false;
-        return needsSizeLookup(product, sizeFilter, sizeDetails, sizeFetchAttemptsRef.current) && !autoSizeChecksRef.current.has(product.url);
+        return needsSizeLookup(product, sizeFilter, sizeDetails, sizeFetchAttemptsRef.current, audience) && !autoSizeChecksRef.current.has(product.url);
       }).slice(0, remainingAutoChecks);
       candidates.forEach((product) => autoSizeChecksRef.current.add(product.url));
       if (candidates.length) {
@@ -485,16 +500,16 @@ export default function Home() {
                 {product.imageUrl ? <img src={product.imageUrl} alt={product.title} loading="lazy" /> : <div className="image-placeholder"><PackageSearch size={35} /><span>NIKE PRODUCT</span></div>}
               </div>
               <div className="product-info">
-                <div className="product-kicker">{categoryOf(product).toUpperCase()} · {(product.gender ?? "Unknown").toUpperCase()}{product.sizeSystem === "youth" ? " · YOUTH SIZING" : ""} {product.styleCode ? `· ${product.styleCode}` : ""}</div>
+                <div className="product-kicker">{categoryOf(product).toUpperCase()} · {audienceOf(product).toUpperCase()}{product.sizeSystem === "youth" ? " · YOUTH SIZING" : ""} {product.styleCode ? `· ${product.styleCode}` : ""}</div>
                 <h3>{product.title}</h3>
                 {product.subtitle && <p className="product-subtitle">{product.subtitle}</p>}
                 <div className="price-row"><strong>{money(product.price, product.currency)}</strong>{product.fullPrice && product.price && product.fullPrice > product.price && <><del>{money(product.fullPrice, product.currency)}</del><span className="savings">Save {money(product.fullPrice - product.price, product.currency)}</span></>}</div>
-                {sizes.length > 0 && <div className="size-list"><span>ONLINE SIZE DATA</span><div>{sizes.slice(0, 7).map((size) => <span key={size.label} className={size.available === false ? "size-unavailable" : ""}>{size.label}</span>)}{sizes.length > 7 && <small>+{sizes.length - 7}</small>}</div></div>}
+                {sizes.length > 0 && <div className="size-list"><span>ONLINE SIZE DATA · GREEN AVAILABLE · STRUCK THROUGH UNAVAILABLE · GRAY UNVERIFIED</span><div>{sizes.slice(0, 7).map((size, sizeIndex) => <span key={`${size.label}-${sizeIndex}`} className={size.available === true ? "size-available" : size.available === false ? "size-unavailable" : "size-unverified"} title={size.available === true ? `${size.label}: online shipping marked available` : size.available === false ? `${size.label}: online shipping marked unavailable` : `${size.label}: size listed, stock status not verified${size.status ? ` (source status: ${size.status})` : ""}`}>{size.label}</span>)}{sizes.length > 7 && <small>+{sizes.length - 7}</small>}</div></div>}
                 <div className="product-actions">
                   <a className="pickup-button" href={pickupUrl(product)} target="_blank" rel="noreferrer"><ExternalLink size={13} /> Open product page</a>
                   <button className="sizes-button" onClick={() => void loadSizes(product)} disabled={loadingSizes === product.url}>{loadingSizes === product.url ? <span className="mini-spinner" /> : <ArrowDownUp size={14} />} Sizes</button>
                 </div>
-                <div className="availability-note"><ShieldCheck size={13} /><span>{sizeFilter.trim() ? (() => { const match = sizes.find((size) => sizeMatches(size, sizeFilter, product.gender)); return match?.available === true ? `Nike online size status: ${match.label} marked available · store pickup unverified` : match?.available === false ? `Nike online size status: ${match.label} marked unavailable` : `Size ${sizeFilter} listed, but stock status is unverified · store pickup unverified`; })() : "Online shipping sizes only · store pickup inventory unverified"}</span></div>
+                <div className="availability-note"><ShieldCheck size={13} /><span>{sizeFilter.trim() ? (() => { const match = sizes.find((size) => sizeMatches(size, sizeFilter, audienceOf(product))); return match?.available === true ? `Nike online shipping: size ${match.label} marked available · store pickup not checked` : match?.available === false ? `Nike online shipping: size ${match.label} marked unavailable` : match ? `Size ${match.label} is listed, but online stock is unverified${match.status ? ` (source status: ${match.status})` : ""} · store pickup not checked` : `No ${sizeFilter} size entry was returned for this product · availability not confirmed`; })() : "Size options are not the same as stock. Only explicit online inventory signals are marked available; store pickup is not checked."}</span></div>
               </div>
             </article>;
           })}
