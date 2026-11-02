@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import type { NikeProduct } from "@/lib/types";
+import { normalizeNikeProduct } from "@/lib/nike";
 
 export const runtime = "nodejs";
 
@@ -15,9 +15,10 @@ export async function GET(request: NextRequest) {
     const rows = await sql`
       SELECT product_json
       FROM nike_product_catalog
-      WHERE title ILIKE ${pattern}
+      WHERE product_json->>'catalogVersion' = '2'
+        AND (title ILIKE ${pattern}
          OR COALESCE(subtitle, '') ILIKE ${pattern}
-         OR COALESCE(style_code, '') ILIKE ${pattern}
+         OR COALESCE(style_code, '') ILIKE ${pattern})
       ORDER BY CASE WHEN lower(title) = lower(${query}) THEN 0
                     WHEN lower(title) LIKE lower(${pattern}) THEN 1 ELSE 2 END,
                updated_at DESC
@@ -25,7 +26,9 @@ export async function GET(request: NextRequest) {
     ` as Array<{ product_json: unknown }>;
     const suggestions = rows.flatMap((row) => {
       const value = typeof row.product_json === "string" ? JSON.parse(row.product_json) : row.product_json;
-      return value && typeof value === "object" ? [value as NikeProduct] : [];
+      if (!value || typeof value !== "object") return [];
+      const normalized = normalizeNikeProduct(value);
+      return normalized ? [normalized] : [];
     });
     return NextResponse.json({ suggestions, source: "neon-cache", cacheConfigured: true });
   } catch {
