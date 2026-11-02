@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { normalizeNikeProduct } from "@/lib/nike";
+import { relevantToQuery } from "@/lib/search-match";
 
 export const runtime = "nodejs";
 
@@ -27,14 +28,14 @@ export async function GET(request: NextRequest) {
       ORDER BY CASE WHEN lower(title) = lower(${query}) THEN 0
                     WHEN lower(title) LIKE lower(${pattern}) THEN 1 ELSE 2 END,
                updated_at DESC
-      LIMIT 8
+      LIMIT 500
     ` as Array<{ product_json: unknown }>;
     const suggestions = rows.flatMap((row) => {
       const value = typeof row.product_json === "string" ? JSON.parse(row.product_json) : row.product_json;
       if (!value || typeof value !== "object") return [];
       const normalized = normalizeNikeProduct(value);
-      return normalized ? [asUnverifiedSearchProduct(normalized)] : [];
-    });
+      return normalized && relevantToQuery(normalized, query) ? [asUnverifiedSearchProduct(normalized)] : [];
+    }).slice(0, 8);
     return NextResponse.json({ suggestions, source: "neon-cache", cacheConfigured: true });
   } catch {
     // The typeahead is a cache-only lookup; never make a paid API call while typing.
