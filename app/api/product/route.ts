@@ -23,8 +23,9 @@ export async function GET(request: NextRequest) {
   try {
     const payload = await nikeApiRequest<unknown>("/nike/v1/product", { url: parsed.toString() });
     const root = payload as Record<string, unknown>;
-    const candidate = root?.product ?? root?.data ?? payload;
-    const product = normalizeNikeProduct(candidate) ?? normalizeNikeProduct({ ...(candidate as object), title: (candidate as Record<string, unknown>)?.title ?? "Nike product", url: parsed.toString() });
+    const data = root?.data && typeof root.data === "object" ? root.data as Record<string, unknown> : null;
+    const candidate = root?.product ?? data?.product ?? data?.item ?? root?.data ?? payload;
+    const product = normalizeNikeProduct(candidate) ?? normalizeNikeProduct({ ...(candidate as object), title: (candidate as Record<string, unknown>)?.title ?? (candidate as Record<string, unknown>)?.name ?? "Nike product", url: parsed.toString() });
     if (!product) return NextResponse.json({ error: "Product details were returned in an unsupported format." }, { status: 502 });
     const meta = providerMeta(payload);
     await writeProductCache(parsed.toString(), product, meta);
