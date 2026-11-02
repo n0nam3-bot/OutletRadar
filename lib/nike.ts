@@ -57,10 +57,19 @@ function normalizeGender(item: Record<string, unknown>, title?: string, subtitle
   const titleAndSubtitle = `${title ?? ""} ${subtitle ?? ""}`.toLowerCase();
   const raw = audienceText(item, title, subtitle);
 
-  // Specific youth taxonomy or explicit Y sizing wins over a broad or inconsistent
-  // provider gender field (e.g. Women metadata attached to a Big Kids shoe).
+  // Specific youth taxonomy or explicit Y sizing wins over broad/inconsistent metadata.
   const youthMarkers = /\b(big kids?|grade school|gs|little kids?|preschool|ps|toddler|infant|youth|kids?|boys?|girls?)\b/;
   if (youthMarkers.test(titleAndSubtitle) || youthMarkers.test(raw) || hasYouthSizeLabels(item)) return "Kids";
+
+  // The product's own title/subtitle is more specific than a broad provider audience
+  // tag. API.SH can label a Men's Shoes listing as Unisex; do not let that generic tag
+  // hide the shoe when a shopper filters for Men. Support straight and curly apostrophes.
+  const descriptorHasMen = /\bmen(?:['’]s)?\b/.test(titleAndSubtitle);
+  const descriptorHasWomen = /\bwomen(?:['’]s)?\b/.test(titleAndSubtitle);
+  if (descriptorHasMen && descriptorHasWomen) return "Unisex";
+  if (descriptorHasMen) return "Men";
+  if (descriptorHasWomen) return "Women";
+
   const saysWomen = /\bwomen|woman|female\b/.test(raw);
   const saysMen = /\bmen|man|male\b/.test(raw);
   if (/\bunisex|all gender|all-gender\b/.test(raw) || (saysWomen && saysMen)) return "Unisex";
@@ -142,9 +151,65 @@ function safeNikeUrl(value: unknown): string | undefined {
   }
 }
 
+function explicitBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && (value === 0 || value === 1)) return value === 1;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "yes", "1", "available", "in_stock", "in stock"].includes(normalized)) return true;
+    if (["false", "no", "0", "unavailable", "out_of_stock", "out of stock", "oos"].includes(normalized)) return false;
+  }
+  return undefined;
+}
+
+function statusValue(item: Record<string, unknown>): string | undefined {
+  const availability = record(item.availability);
+  const inventory = record(item.inventory);
+  return firstString(
+    item.stock_status, item.stockStatus, item.availability_status, item.availabilityStatus,
+    item.stock_level, item.stockLevel, item.inventory_status, item.inventoryStatus,
+    item.ship, item.status, item.availability,
+    availability?.stock_status, availability?.stockStatus, availability?.status,
+    availability?.state, availability?.level, availability?.ship,
+    inventory?.status, inventory?.state, inventory?.availability,
+  );
+}
+
+function sizeAvailability(item: Record<string, unknown>): { available: boolean | null; status?: string } {
+  const availability = record(item.availability);
+  const inventory = record(item.inventory);
+  const explicit = [
+    item.available, item.is_available, item.isAvailable, item.in_stock, item.inStock,
+    item.is_buyable, item.isBuyable, item.purchasable, item.buyable,
+    availability?.available, availability?.is_available, availability?.isAvailable,
+    inventory?.available, inventory?.in_stock, inventory?.inStock,
+  ].map(explicitBoolean).find((value) => value !== undefined);
+  const status = statusValue(item);
+  if (explicit !== undefined) return { available: explicit, status };
+  if (!status) return { available: null };
+
+  const normalized = status.toLowerCase().replace(/[\s-]+/g, "_").trim();
+  // Treat only stock/purchasability signals as inventory. Generic catalog states such
+  // as ACTIVE, INACTIVE or ENABLED describe the size/SKU record, not stock on hand.
+  if (/^(out_of_stock|oos|sold_out|unavailable|not_available|not_in_stock|no_stock)$/.test(normalized)) {
+    return { available: false, status };
+  }
+  if (/^(in_stock|available|high|medium|low|limited|few|low_stock|limited_stock)$/.test(normalized)) {
+    return { available: true, status };
+  }
+  return { available: null, status };
+}
+
 function normalizeSizeList(value: unknown): ProductSize[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const sizes = value.flatMap<ProductSize>((entry) => {
+  const wrapper = record(value);
+  const entries = Array.isArray(value)
+    ? value
+    : Array.isArray(wrapper?.sizes) ? wrapper.sizes
+      : Array.isArray(wrapper?.items) ? wrapper.items
+        : Array.isArray(wrapper?.results) ? wrapper.results
+          : undefined;
+  if (!entries) return undefined;
+  const sizes = entries.flatMap<ProductSize>((entry) => {
     const item = record(entry);
     if (!item) {
       const label = firstString(entry);
@@ -153,18 +218,8 @@ function normalizeSizeList(value: unknown): ProductSize[] | undefined {
     const label = firstString(item.label, item.localized_label, item.localizedLabel, item.size, item.name, item.value);
     if (!label) return [];
     const localizedLabel = firstString(item.localized_label, item.localizedLabel);
-    const status = firstString(item.status, item.ship, item.availability);
-    const explicitAvailability = item.available ?? item.is_available ?? item.isAvailable ?? item.in_stock ?? item.inStock;
-    const available = typeof explicitAvailability === "boolean"
-      ? explicitAvailability
-      : status
-        ? /out|oos|unavailable|sold|inactive|not available/i.test(status)
-          ? false
-          : /in[\s_-]?stock|available|high|medium|low|limited|few/i.test(status)
-            ? true
-            : null
-        : null;
-    return [{ label, localizedLabel, status, available }];
+    const stock = sizeAvailability(item);
+    return [{ label, localizedLabel, status: stock.status, available: stock.available }];
   });
   return sizes.length ? sizes : undefined;
 }
@@ -188,7 +243,11 @@ export function normalizeNikeProduct(value: unknown): NikeProduct | null {
   const images = item.images ?? item.image_urls;
   const subtitle = firstString(item.subtitle, item.description, item.category, item.product_type);
 
-  const sizes = normalizeSizeList(item.sizes ?? item.size_availability ?? item.available_sizes);
+  const raw = record(item.raw);
+  const sizes = normalizeSizeList(
+    item.sizes ?? item.size_availability ?? item.sizeAvailability ?? item.available_sizes ??
+    item.availableSizes ?? item.size_options ?? item.sizeOptions ?? raw?.sizes ?? raw?.size_availability,
+  );
   const gender = normalizeGender(item, title, subtitle);
   const rawOnSale = item.on_sale ?? item.onSale ?? item.is_sale ?? item.isSale ?? item.sale;
   const onSale = rawOnSale === true || (discountPercent ?? 0) > 0 || (price !== undefined && fullPrice !== undefined && fullPrice > price);
