@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { normalizeNikeProduct, nikeApiRequest, providerMeta } from "@/lib/nike";
+import { readProductCache, writeProductCache } from "@/lib/search-cache";
 
 export const runtime = "nodejs";
 
@@ -13,13 +14,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Only official Nike product links are supported." }, { status: 400 });
   }
 
+  const cached = await readProductCache(parsed.toString());
+  if (cached) return NextResponse.json({ product: cached.product, meta: { ...cached.meta, cached: true, cacheSource: "neon" }, sizeAvailabilityType: "online-shipping" });
+
   try {
     const payload = await nikeApiRequest<unknown>("/nike/v1/product", { url: parsed.toString() });
     const root = payload as Record<string, unknown>;
     const candidate = root?.product ?? root?.data ?? payload;
     const product = normalizeNikeProduct(candidate) ?? normalizeNikeProduct({ ...(candidate as object), title: (candidate as Record<string, unknown>)?.title ?? "Nike product", url: parsed.toString() });
     if (!product) return NextResponse.json({ error: "Product details were returned in an unsupported format." }, { status: 502 });
-    return NextResponse.json({ product, meta: providerMeta(payload), sizeAvailabilityType: "online-shipping" });
+    const meta = providerMeta(payload);
+    await writeProductCache(parsed.toString(), product, meta);
+    return NextResponse.json({ product, meta: { ...meta, cached: false, cacheSource: "provider" }, sizeAvailabilityType: "online-shipping" });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected product lookup error.";
     return NextResponse.json({ error: message }, { status: /not configured/i.test(message) ? 503 : 502 });
