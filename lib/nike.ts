@@ -165,35 +165,46 @@ function explicitBoolean(value: unknown): boolean | undefined {
 function statusValue(item: Record<string, unknown>): string | undefined {
   const availability = record(item.availability);
   const inventory = record(item.inventory);
-  return firstString(
+  const values = [
     item.stock_status, item.stockStatus, item.availability_status, item.availabilityStatus,
-    item.stock_level, item.stockLevel, item.inventory_status, item.inventoryStatus,
-    item.ship, item.status, item.availability,
+    item.stock_level, item.stockLevel, item.inventory_level, item.inventoryLevel,
+    item.availability_level, item.availabilityLevel, item.inventory_status, item.inventoryStatus,
+    item.level, item.ship, item.status, item.availability,
     availability?.stock_status, availability?.stockStatus, availability?.status,
     availability?.state, availability?.level, availability?.ship,
     inventory?.status, inventory?.state, inventory?.availability,
-  );
+  ].map((value) => firstString(value)).filter((value): value is string => Boolean(value));
+
+  // Prefer explicit sold-out signals over generic SKU states such as ACTIVE.
+  const outOfStock = values.find((value) => /^(out[_\s-]?of[_\s-]?stock|oos|sold[_\s-]?out|unavailable|not[_\s-]?available|not[_\s-]?in[_\s-]?stock|no[_\s-]?stock)$/i.test(value.trim()));
+  if (outOfStock) return outOfStock;
+  const inventorySignal = values.find((value) => /^(in[_\s-]?stock|available|high|medium|low|limited|few|low[_\s-]?stock|limited[_\s-]?stock)$/i.test(value.trim()));
+  return inventorySignal ?? values[0];
 }
 
 function sizeAvailability(item: Record<string, unknown>): { available: boolean | null; status?: string } {
   const availability = record(item.availability);
   const inventory = record(item.inventory);
   const explicit = [
+    // Restrict positives to actual stock fields. `is_buyable`/`purchasable` can
+    // describe a catalog/SKU record and are not reliable size-level stock signals.
     item.available, item.is_available, item.isAvailable, item.in_stock, item.inStock,
-    item.is_buyable, item.isBuyable, item.purchasable, item.buyable,
     availability?.available, availability?.is_available, availability?.isAvailable,
     inventory?.available, inventory?.in_stock, inventory?.inStock,
   ].map(explicitBoolean).find((value) => value !== undefined);
   const status = statusValue(item);
-  if (explicit !== undefined) return { available: explicit, status };
-  if (!status) return { available: null };
+  const normalized = status?.toLowerCase().replace(/[\s-]+/g, "_").trim();
 
-  const normalized = status.toLowerCase().replace(/[\s-]+/g, "_").trim();
-  // Treat only stock/purchasability signals as inventory. Generic catalog states such
-  // as ACTIVE, INACTIVE or ENABLED describe the size/SKU record, not stock on hand.
-  if (/^(out_of_stock|oos|sold_out|unavailable|not_available|not_in_stock|no_stock)$/.test(normalized)) {
+  // A definitive sold-out state always wins over a contradictory positive flag.
+  // This prevents stale/aggregated `available: true` values from overriding OOS.
+  if (normalized && /^(out_of_stock|oos|sold_out|unavailable|not_available|not_in_stock|no_stock)$/.test(normalized)) {
     return { available: false, status };
   }
+  if (explicit !== undefined) return { available: explicit, status };
+  if (!normalized) return { available: null };
+
+  // HIGH/MEDIUM/LOW are Nike shipping stock levels in API.SH product size data.
+  // Generic catalog states such as ACTIVE/INACTIVE/ENABLED are not inventory.
   if (/^(in_stock|available|high|medium|low|limited|few|low_stock|limited_stock)$/.test(normalized)) {
     return { available: true, status };
   }

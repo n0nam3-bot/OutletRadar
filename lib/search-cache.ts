@@ -3,7 +3,7 @@ import { getDb } from "@/lib/db";
 import type { NikeProduct } from "@/lib/types";
 
 const SEARCH_TTL_HOURS = 12;
-const PRODUCT_TTL_HOURS = 18;
+const PRODUCT_TTL_MINUTES = 5;
 
 // One base cache per model query. Gender, size, category and sale are deliberately
 // excluded so shoppers can change filters without another provider search call.
@@ -86,16 +86,18 @@ export async function readProductCache(productUrl: string) {
   if (!sql) return null;
   try {
     const rows = await sql`
-      SELECT product_json, meta_json
+      SELECT product_json, meta_json, cached_at
       FROM nike_product_detail_cache
-      WHERE product_url = ${productUrl} AND expires_at > now()
+      WHERE product_url = ${productUrl}
+        AND expires_at > now()
+        AND cached_at > now() - interval '5 minutes'
       LIMIT 1
     ` as Array<Record<string, unknown>>;
     const row = rows[0];
     if (!row) return null;
     const product = typeof row.product_json === "string" ? JSON.parse(row.product_json) : row.product_json;
     const meta = typeof row.meta_json === "string" ? JSON.parse(row.meta_json) : row.meta_json;
-    return product && typeof product === "object" ? { product: product as NikeProduct, meta: (meta ?? {}) as Record<string, unknown> } : null;
+    return product && typeof product === "object" ? { product: product as NikeProduct, meta: (meta ?? {}) as Record<string, unknown>, cachedAt: row.cached_at } : null;
   } catch {
     return null;
   }
@@ -108,10 +110,10 @@ export async function writeProductCache(productUrl: string, product: NikeProduct
     await sql`
       INSERT INTO nike_product_detail_cache (product_url, product_json, meta_json, cached_at, expires_at)
       VALUES (${productUrl}, ${JSON.stringify(product)}::jsonb, ${JSON.stringify(meta)}::jsonb,
-              now(), now() + (${PRODUCT_TTL_HOURS} * interval '1 hour'))
+              now(), now() + (${PRODUCT_TTL_MINUTES} * interval '1 minute'))
       ON CONFLICT (product_url) DO UPDATE SET
         product_json = EXCLUDED.product_json, meta_json = EXCLUDED.meta_json,
-        cached_at = now(), expires_at = now() + (${PRODUCT_TTL_HOURS} * interval '1 hour')
+        cached_at = now(), expires_at = now() + (${PRODUCT_TTL_MINUTES} * interval '1 minute')
     `;
   } catch {
     // Product detail requests continue to work when caching is unavailable.
