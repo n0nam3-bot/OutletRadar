@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
   try {
     const rows = await sql`
       SELECT id::text, product_url, title, image_url, style_code, current_price,
-             full_price, discount_percent, currency, last_checked_at
+             full_price, discount_percent, currency, product_gender AS gender, product_category AS category, last_checked_at
       FROM watched_products
       WHERE visitor_id = ${visitorId}
       ORDER BY created_at DESC
@@ -45,18 +45,20 @@ export async function POST(request: NextRequest) {
   try {
     const rows = await sql`
       INSERT INTO watched_products
-        (visitor_id, product_url, title, image_url, style_code, current_price, full_price, discount_percent, currency)
+        (visitor_id, product_url, title, image_url, style_code, current_price, full_price, discount_percent, currency, product_gender, product_category)
       VALUES
         (${body.visitorId}, ${body.productUrl}, ${body.title}, ${typeof body.imageUrl === "string" ? body.imageUrl : null},
          ${typeof body.styleCode === "string" ? body.styleCode : null},
          ${typeof body.price === "number" ? body.price : null}, ${typeof body.fullPrice === "number" ? body.fullPrice : null},
-         ${typeof body.discountPercent === "number" ? body.discountPercent : null}, ${typeof body.currency === "string" ? body.currency : "USD"})
+         ${typeof body.discountPercent === "number" ? body.discountPercent : null}, ${typeof body.currency === "string" ? body.currency : "USD"},
+         ${typeof body.gender === "string" ? body.gender : "Unknown"}, ${typeof body.category === "string" ? body.category : "Other"})
       ON CONFLICT (visitor_id, product_url) DO UPDATE SET
         title = EXCLUDED.title, image_url = EXCLUDED.image_url, style_code = EXCLUDED.style_code,
         current_price = EXCLUDED.current_price, full_price = EXCLUDED.full_price,
-        discount_percent = EXCLUDED.discount_percent, currency = EXCLUDED.currency
+        discount_percent = EXCLUDED.discount_percent, currency = EXCLUDED.currency,
+        product_gender = EXCLUDED.product_gender, product_category = EXCLUDED.product_category
       RETURNING id::text, product_url, title, image_url, style_code, current_price, full_price,
-                discount_percent, currency, last_checked_at
+                discount_percent, currency, product_gender AS gender, product_category AS category, last_checked_at
     `;
     return NextResponse.json({ item: rows[0] });
   } catch {
