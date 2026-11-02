@@ -10,3 +10,37 @@
 /* Search refinements: Neon-backed typeahead, ZIP-radius results, and explicit filters. */
 .search-suggestions{position:relative;z-index:5;margin:-6px 0 14px;background:#fff;border:1px solid #e1e7dc;box-shadow:0 12px 28px #1c28120c;max-width:100%}.suggestion-heading{display:flex;justify-content:space-between;padding:10px 14px;font:9px var(--mono);letter-spacing:.08em;color:#8a9587;border-bottom:1px solid #edf0ec}.suggestion-heading span{color:#77944e}.search-suggestions button{width:100%;border:0;border-bottom:1px solid #f0f2ef;background:#fff;display:flex;align-items:center;gap:11px;text-align:left;padding:9px 13px;color:#697268}.search-suggestions button:last-child{border-bottom:0}.search-suggestions button:hover{background:#f7f9f4}.suggestion-thumb{height:39px;width:48px;background:#f3f5f1;display:grid;place-items:center;flex:none;overflow:hidden}.suggestion-thumb img{width:100%;height:100%;object-fit:contain}.suggestion-copy{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}.suggestion-copy strong{font:600 11px var(--display);color:#222a22;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.suggestion-copy small{font:9px var(--mono);color:#929b90}.location-actions select{height:38px;border:1px solid #e2e7df;background:#fff;padding:0 8px;color:#525b51;font:10px var(--mono);outline:0}.map-link:disabled{opacity:.65;cursor:wait}.store-error,.store-results-loading{padding:11px 14px;margin-top:8px;background:#fff;border:1px solid #e4e9e1;color:#697767;font-size:10px}.store-error{color:#a34e3e;background:#fff4f0;border-color:#efd8d0}.nearby-store-panel{margin-top:9px;padding:15px;background:#fff;border:1px solid #e4e9e1}.nearby-store-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}.nearby-store-heading>div{display:flex;flex-direction:column;gap:4px}.nearby-store-heading strong{font:600 13px var(--display)}.nearby-store-heading span{font:9px var(--mono);color:#8d988a}.nearby-store-heading button{border:0;background:transparent;color:#75816f;font-size:10px;text-decoration:underline}.nearby-store-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.nearby-store-card{border:1px solid #e9ede6;background:#fbfcfa;padding:12px;min-width:0}.nearby-store-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.nearby-store-top strong{font:600 11px/1.35 var(--display)}.nearby-store-top span{font:10px var(--mono);color:#64843e;white-space:nowrap}.nearby-store-card .store-type{font:8px var(--mono);color:#82906f;margin-top:6px;text-transform:uppercase;letter-spacing:.06em}.nearby-store-card p{min-height:30px;font-size:9px;line-height:1.5;color:#858f83;margin:8px 0}.nearby-store-card a{display:inline-flex;align-items:center;gap:5px;color:#536d37;font-size:9px;font-weight:700}.store-stock-disclaimer{font-size:9px;line-height:1.55;color:#858f83;margin:12px 0 0}.store-empty{font-size:10px;color:#858f83}.filter-help{display:block;max-width:175px;margin-top:6px;font-size:8px;line-height:1.4;color:#8b9588}.select-product-button{margin-top:8px;width:100%;height:29px;border:1px solid #e3e9dd;background:#fbfcfa;color:#65775b;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:5px}.select-product-button:hover,.select-product-button.selected{background:#f0f6e8;border-color:#d8e6c6;color:#4e6b2c}.product-actions{margin-top:13px}
 @media(max-width:760px){.nearby-store-grid{grid-template-columns:1fr}.nearby-store-card p{min-height:0}.location-actions select{flex:1;min-width:0}.location-actions .map-link{min-width:100px}.search-suggestions{margin-top:-2px}.suggestion-heading{font-size:8px}}
+
+
+/* v1.2: apply product filters before/after the single base search without re-querying Nike. */
+.search-filter-panel{margin:18px 0 8px;padding:17px 18px;background:#fff;border:1px solid #e5eae2;}
+.search-filter-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:14px;}
+.search-filter-heading strong{font:10px var(--mono);letter-spacing:.1em;color:#4f614b;}
+.search-filter-heading span{font:9px var(--mono);color:#929b90;text-align:right;}
+.search-filter-grid{display:grid;grid-template-columns:1.1fr 1.1fr 1fr auto;align-items:end;gap:12px;}
+.search-filter-field{display:flex;flex-direction:column;gap:7px;min-width:0;}
+.search-filter-field>span,.sort-inline>span{font:9px var(--mono);letter-spacing:.08em;color:#8c9689;}
+.search-filter-field select,.search-filter-field input,.sort-inline select{height:39px;min-width:0;width:100%;border:1px solid #e2e7df;background:#fbfcfa;padding:0 10px;color:#364034;font:10px var(--mono);outline:0;border-radius:0;}
+.search-filter-field select:focus,.search-filter-field input:focus,.sort-inline select:focus{border-color:#a8bb8b;box-shadow:0 0 0 2px #a8bb8b22;}
+.search-sale-toggle{height:39px;align-self:end;white-space:nowrap;padding:0 10px;border:1px solid #e2e7df;background:#fbfcfa;}
+.search-sale-toggle.sale-toggle-active{border-color:#cdddaf;background:#f3f8eb;color:#516d32;}
+.size-filter-note{font-size:9px;line-height:1.55;color:#7e8978;margin:11px 0 0;}
+.sort-inline{display:flex;align-items:center;gap:8px;min-width:190px;}
+.sort-inline select{height:34px;font-size:9px;}
+.pickup-button{gap:6px;}
+@media(max-width:760px){
+  .search-filter-panel{padding:14px 12px;margin-top:14px;}
+  .search-filter-heading{align-items:flex-start;flex-direction:column;gap:5px;}
+  .search-filter-heading span{text-align:left;line-height:1.45;}
+  .search-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
+  .search-sale-toggle{width:100%;justify-content:space-between;}
+  .sort-inline{min-width:0;gap:6px;}
+  .sort-inline select{max-width:145px;}
+}
+@media(max-width:390px){.search-filter-grid{grid-template-columns:1fr 1fr;}.search-filter-field select,.search-filter-field input{font-size:9px;padding:0 7px;}.search-sale-toggle{font-size:8px;padding:0 7px;}}
+
+.size-filter-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:11px;}
+.size-filter-foot .size-filter-note{margin:0;flex:1;}
+.size-more-button{flex:none;border:1px solid #dfe7d6;background:#f7faf3;color:#536c3a;padding:8px 10px;font:9px var(--mono);}
+.size-more-button:hover{background:#eff6e6;border-color:#c9d8b7;}
+@media(max-width:760px){.size-filter-foot{align-items:flex-start;flex-direction:column;}.size-more-button{width:100%;}}
