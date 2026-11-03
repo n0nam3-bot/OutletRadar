@@ -51,3 +51,41 @@
 .size-list>div .size-unverified{background:#fafbf9;border:1px dashed #cbd2c7;color:#788173;}
 .size-list>span{line-height:1.55;display:block;}
 .availability-note{align-items:flex-start;line-height:1.45;}
+
+/* v1.7 multi-retailer comparison */
+.retailer-compare{margin:20px 0 17px;padding:20px;background:#f5f7f2;border:1px solid #e1e8dc}
+.retailer-compare-head{display:flex;align-items:center;justify-content:space-between;gap:20px}
+.retailer-compare-head h3{font:600 22px var(--display);letter-spacing:-.04em;margin:7px 0 5px;color:#202820}
+.retailer-compare-head p{margin:0;color:#849083;font-size:10px;line-height:1.6}
+.compare-retailers-button{height:42px;padding:0 17px;display:inline-flex;align-items:center;justify-content:center;gap:8px;background:#202a23;color:#fff;border:0;font:700 10px var(--mono);white-space:nowrap;cursor:pointer}
+.compare-retailers-button:disabled{opacity:.6;cursor:wait}
+.retailer-compare-note{font:9px/1.55 var(--mono);color:#90998c;margin:12px 0 0}
+.retailer-idle-hint{margin-top:13px;padding:11px 13px;background:#fff;border:1px dashed #dce4d6;font-size:10px;color:#8a9586}
+.retailer-results-wrap{margin-top:14px}
+.retailer-results-meta{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:12px}
+.retailer-results-meta strong{font:600 13px var(--display);color:#2b342b}
+.retailer-results-meta span{font:8px var(--mono);color:#8d9788;text-align:right}
+.retailer-source-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:0 0 12px}
+.retailer-source-status{display:flex;flex-direction:column;gap:4px;padding:9px 11px;background:#fff;border:1px solid #e6ebe2;min-width:0}
+.retailer-source-status strong{font:700 9px var(--mono);color:#56664d}
+.retailer-source-status span{font-size:9px;line-height:1.5;color:#8b9487}
+.retailer-offer-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.retailer-offer-card{display:flex;flex-direction:column;min-width:0;background:#fff;border:1px solid #e6ebe2}
+.retailer-offer-image{height:145px;display:grid;place-items:center;background:#f0f2ee;color:#a2ac9c;overflow:hidden}
+.retailer-offer-image img{height:100%;width:100%;object-fit:contain}
+.retailer-offer-body{padding:11px 12px 12px;display:flex;flex-direction:column;align-items:flex-start;flex:1}
+.retailer-offer-kicker{width:100%;display:flex;align-items:center;justify-content:space-between;gap:7px;font:8px var(--mono);letter-spacing:.06em;color:#77856e;text-transform:uppercase}
+.retailer-offer-kicker span:last-child{color:#9aa394}
+.retailer-offer-body h4{font:600 13px/1.35 var(--display);color:#253025;margin:9px 0 5px}
+.retailer-offer-body>small{font:8px var(--mono);color:#929b90}
+.retailer-offer-price{display:flex;align-items:baseline;gap:8px;margin-top:10px}
+.retailer-offer-price strong{font:600 16px var(--display);color:#202820}
+.retailer-offer-price span{font:8px var(--mono);color:#929b90}
+.retailer-offer-stock{display:flex;align-items:flex-start;gap:7px;font-size:8px;line-height:1.55;color:#879184;margin:10px 0 12px}
+.unknown-dot{height:7px;width:7px;border-radius:50%;background:#b7bdb4;flex:none;margin-top:2px}
+.retailer-offer-body>a{margin-top:auto;display:inline-flex;align-items:center;gap:6px;color:#536d37;font-size:9px;font-weight:700}
+.retailer-no-results{display:flex;flex-direction:column;gap:5px;padding:18px;background:#fff;border:1px solid #e6ebe2}
+.retailer-no-results strong{font:600 12px var(--display);color:#404a3e}
+.retailer-no-results span{font-size:9px;line-height:1.5;color:#8a9487}
+@media(max-width:760px){.retailer-compare{padding:14px 12px}.retailer-compare-head{align-items:flex-start;flex-direction:column;gap:12px}.compare-retailers-button{width:100%}.retailer-results-meta{align-items:flex-start;flex-direction:column;gap:5px}.retailer-results-meta span{text-align:left}.retailer-source-grid{grid-template-columns:1fr}.retailer-offer-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.retailer-offer-image{height:125px}.retailer-offer-body{padding:9px}.retailer-offer-body h4{font-size:11px}}
+@media(max-width:390px){.retailer-offer-grid{grid-template-columns:1fr}.retailer-offer-image{height:170px}}

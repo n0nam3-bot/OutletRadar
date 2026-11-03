@@ -46,6 +46,31 @@ export type NearbyStore = {
   latitude: number;
   longitude: number;
   distanceMiles: number;
-  storeType: "Factory / Clearance" | "Nike Store";
+  storeType: string;
   mapUrl: string;
+};
+
+export type MarketplaceProvider = "stockx" | "goat" | "flightclub" | "kickscrew" | "shopping";
+export type MarketplaceOffer = {
+  id: string;
+  source: MarketplaceProvider;
+  retailer: string;
+  channel: "online" | "store";
+  title: string;
+  url: string;
+  imageUrl?: string;
+  styleCode?: string;
+  brand?: string;
+  price?: number;
+  priceLabel?: string;
+  currency: string;
+  availability: "available" | "unavailable" | "unknown";
+  availabilityLabel: string;
+  sourceUpdatedAt?: string;
+};
+export type MarketplaceSourceStatus = {
+  name: string;
+  status: "success" | "not_configured" | "error" | "budget_reached";
+  results: number;
+  message: string;
 };

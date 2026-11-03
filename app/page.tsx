@@ -3,9 +3,9 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownUp, ArrowRight, Check, ExternalLink, Heart,
-  MapPin, PackageSearch, Search, ShieldCheck, Sparkles, Tag, X,
+  MapPin, PackageSearch, Search, ShieldCheck, ShoppingBag, Sparkles, Tag, X,
 } from "lucide-react";
-import type { NearbyStore, NikeProduct, ProductSize } from "@/lib/types";
+import type { MarketplaceOffer, MarketplaceSourceStatus, NearbyStore, NikeProduct, ProductSize } from "@/lib/types";
 
 type Tab = "search" | "saved";
 type Category = "All" | "Shoes" | "Apparel" | "Accessories" | "Other";
@@ -139,6 +139,11 @@ export default function Home() {
   const [stores, setStores] = useState<NearbyStore[]>([]);
   const [storeStatus, setStoreStatus] = useState<Status>("idle");
   const [storeError, setStoreError] = useState("");
+  const [marketplaceOffers, setMarketplaceOffers] = useState<MarketplaceOffer[]>([]);
+  const [marketplaceSources, setMarketplaceSources] = useState<Array<MarketplaceSourceStatus & { key?: string }>>([]);
+  const [marketplaceStatus, setMarketplaceStatus] = useState<Status>("idle");
+  const [marketplaceError, setMarketplaceError] = useState("");
+  const [marketplaceCachedAt, setMarketplaceCachedAt] = useState<string | null>(null);
   const [saleOnly, setSaleOnly] = useState(false);
   const [genderFilter, setGenderFilter] = useState("all");
   const [suggestions, setSuggestions] = useState<NikeProduct[]>([]);
@@ -283,6 +288,11 @@ export default function Home() {
     setSizeDetailsCheckedAt({});
     setSelectedProductUrl("");
     setSuggestionsOpen(false);
+    setMarketplaceOffers([]);
+    setMarketplaceSources([]);
+    setMarketplaceStatus("idle");
+    setMarketplaceError("");
+    setMarketplaceCachedAt(null);
     try {
       const params = new URLSearchParams({ q: term });
       // Audience, sale, category and size are filtered from the same cached base result.
@@ -299,6 +309,25 @@ export default function Home() {
     }
   }
 
+  async function compareRetailers() {
+    const term = query.trim();
+    if (term.length < 2) { setMarketplaceError("Enter a product or model name first."); return; }
+    setMarketplaceStatus("loading");
+    setMarketplaceError("");
+    try {
+      const response = await fetch(`/api/marketplaces?q=${encodeURIComponent(term)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Retailer comparison failed.");
+      setMarketplaceOffers(Array.isArray(data.offers) ? data.offers : []);
+      setMarketplaceSources(Array.isArray(data.sources) ? data.sources : []);
+      setMarketplaceCachedAt(data.cachedAt ? String(data.cachedAt) : null);
+      setMarketplaceStatus("success");
+    } catch (caught) {
+      setMarketplaceError(caught instanceof Error ? caught.message : "Retailer comparison failed.");
+      setMarketplaceStatus("error");
+    }
+  }
+
   function chooseSuggestion(product: NikeProduct) {
     setQuery(product.title);
     setProducts([product]);
@@ -311,6 +340,10 @@ export default function Home() {
     setSizeDetailsCheckedAt({});
     setSuggestionsOpen(false);
     setError("");
+    setMarketplaceOffers([]);
+    setMarketplaceSources([]);
+    setMarketplaceStatus("idle");
+    setMarketplaceError("");
   }
 
 
@@ -458,7 +491,7 @@ export default function Home() {
         <div className="hero-content">
           <div className="eyebrow"><span className="eyebrow-line" /> THE HUNT STARTS HERE</div>
           <h1>Find the pair.<br /><em>Find the price.</em></h1>
-          <p className="hero-copy">Search Nike styles, compare current prices, and narrow results by audience and size. One catalog search, reusable filters.</p>
+          <p className="hero-copy">Search Nike styles, compare marketplace and retailer listings, and narrow results by audience and size. Reuse cached searches to conserve free API credits.</p>
           <div className="hero-points">
             <span><Check size={14} /> US catalog search</span>
             <span><Check size={14} /> Sale price comparison</span>
@@ -476,10 +509,10 @@ export default function Home() {
       <section className="search-section" id="search">
         <div className="section-heading">
           <div><div className="eyebrow dark-eyebrow">01 / PRODUCT SEARCH</div><h2>What are you hunting?</h2></div>
-          <div className="catalog-note"><span className="live-dot" /> Searching Nike US public product listings</div>
+          <div className="catalog-note"><span className="live-dot" /> Nike catalog + optional multi-retailer comparison</div>
         </div>
         <form className="search-form" onSubmit={onSubmit}>
-          <div className="search-input-wrap"><Search size={21} /><input value={query} onFocus={() => setSuggestionsOpen(true)} onChange={(event) => { setQuery(event.target.value); setSelectedProductUrl(""); setSuggestionsOpen(true); }} placeholder="Search a style, model, or style code..." aria-label="Search Nike products" autoComplete="off" /><button type="button" className="clear-query" onClick={() => { setQuery(""); setSuggestions([]); setSuggestionsOpen(false); setSelectedProductUrl(""); }} aria-label="Clear search">{query ? <X size={17} /> : null}</button></div>
+          <div className="search-input-wrap"><Search size={21} /><input value={query} onFocus={() => setSuggestionsOpen(true)} onChange={(event) => { setQuery(event.target.value); setSelectedProductUrl(""); setSuggestionsOpen(true); setMarketplaceOffers([]); setMarketplaceSources([]); setMarketplaceStatus("idle"); setMarketplaceError(""); setMarketplaceCachedAt(null); }} placeholder="Search a style, model, or style code..." aria-label="Search sneaker products" autoComplete="off" /><button type="button" className="clear-query" onClick={() => { setQuery(""); setSuggestions([]); setSuggestionsOpen(false); setSelectedProductUrl(""); setMarketplaceOffers([]); setMarketplaceSources([]); setMarketplaceStatus("idle"); setMarketplaceError(""); setMarketplaceCachedAt(null); }} aria-label="Clear search">{query ? <X size={17} /> : null}</button></div>
           <button className="search-button" type="submit" disabled={searchStatus === "loading"}>{searchStatus === "loading" ? <span className="spinner" /> : <Search size={17} />} <span>{searchStatus === "loading" ? "Searching" : "Search"}</span><ArrowRight size={17} /></button>
         </form>
         {suggestionsOpen && query.trim().length >= 3 && suggestions.length === 0 && <div className="suggestion-hint">No previously cached product matches. Press Search to query Nike; that result will be saved in Neon for future suggestions.</div>}
@@ -495,13 +528,34 @@ export default function Home() {
           {sizeFilter.trim() && <div className="size-filter-foot"><p className="size-filter-note">Size matching uses each product's own sizing system. Youth 5Y stays separate from adult 5. Filtering does not use API credits. To check online stock, press Check sizes on an individual product; verified product details are reused from Neon for up to one hour.</p></div>}
         </div>
         <div className="search-controls"><div className="suggested"><span className="control-label">QUICK SEARCH</span>{SUGGESTED_SEARCHES.map((term) => <button type="button" className="suggestion" key={term} onClick={() => { setQuery(term); void runSearch(term); }}>{term}</button>)}</div></div>
+
+        <section className="retailer-compare" aria-label="Compare sneaker retailers">
+          <div className="retailer-compare-head">
+            <div><div className="eyebrow dark-eyebrow">02 / MULTI-RETAILER SEARCH</div><h3>Check other retailers</h3><p>Compare StockX, GOAT, Flight Club, Kicks Crew, Foot Locker and other merchants.</p></div>
+            <button className="compare-retailers-button" type="button" onClick={() => void compareRetailers()} disabled={marketplaceStatus === "loading" || query.trim().length < 2}>{marketplaceStatus === "loading" ? <span className="mini-spinner" /> : <ShoppingBag size={15} />} {marketplaceStatus === "loading" ? "Comparing" : "Compare retailers"}</button>
+          </div>
+          <p className="retailer-compare-note">Only runs when you press Compare retailers. Uncached requests are limited to 5 per IP per day and protected by monthly free-tier budgets. Results are cached in Neon for 6 hours; PCKT catalog snapshots may be up to 24 hours old.</p>
+          {marketplaceError && <div className="store-error">{marketplaceError}</div>}
+          {marketplaceStatus === "loading" && <div className="store-results-loading">Checking marketplace catalogs and online retailer listings…</div>}
+          {marketplaceStatus === "success" && <div className="retailer-results-wrap">
+            <div className="retailer-results-meta"><strong>{marketplaceOffers.length} matching online listing{marketplaceOffers.length === 1 ? "" : "s"}</strong><span>{marketplaceCachedAt ? `Cached ${new Date(marketplaceCachedAt).toLocaleString()}` : "Fresh comparison"} · exact size stock not assumed</span></div>
+            {marketplaceSources.length > 0 && <div className="retailer-source-grid">{marketplaceSources.map((source) => <div className="retailer-source-status" key={`${source.key ?? source.name}-${source.status}`}><strong>{source.name} · {source.status === "success" ? `${source.results} found` : source.status.replaceAll("_", " ")}</strong><span>{source.message}</span></div>)}</div>}
+            {marketplaceOffers.length > 0 ? <div className="retailer-offer-grid">{marketplaceOffers.map((offer) => <article className="retailer-offer-card" key={offer.id}>
+              <div className="retailer-offer-image">{offer.imageUrl ? <img src={offer.imageUrl} alt="" loading="lazy" /> : <PackageSearch size={25} />}</div>
+              <div className="retailer-offer-body"><div className="retailer-offer-kicker"><span>{offer.retailer}</span><span>ONLINE</span></div><h4>{offer.title}</h4>{offer.styleCode && <small>Style / SKU: {offer.styleCode}</small>}{offer.price !== undefined && <div className="retailer-offer-price"><strong>{money(offer.price, offer.currency)}</strong><span>{offer.priceLabel ?? "Displayed price"}</span></div>}<p className="retailer-offer-stock"><span className="unknown-dot" />{offer.availabilityLabel}</p><a href={offer.url} target="_blank" rel="noreferrer">View online listing <ExternalLink size={12} /></a></div>
+            </article>)}</div> : <div className="retailer-no-results"><strong>No matching online listings were returned.</strong><span>Check the source statuses above. Some retailers may not be configured, may not carry the style, or may have returned no exact model match.</span></div>}
+            <p className="store-stock-disclaimer">These are online listings, not confirmed size-level stock. PCKT cached catalog data may be up to 24 hours old, even when the comparison itself is fresh. Open the retailer listing to verify the exact size and checkout status. Nearby physical store addresses are shown separately; they do not confirm that the searched item is stocked there.</p>
+          </div>}
+          {marketplaceStatus === "idle" && <div className="retailer-idle-hint">Enter a model above, then compare retailers. This does not run automatically or spend credits while you type.</div>}
+        </section>
+
         <div className="location-strip">
-          <div className="location-intro"><MapPin size={17} /><div><strong>Find Nike stores near a ZIP code</strong><span>See nearby store addresses and distance in miles.</span></div></div>
+          <div className="location-intro"><MapPin size={17} /><div><strong>Find sneaker retailers near a ZIP code</strong><span>See Nike, Foot Locker, Champs, JD Sports and other mapped store addresses.</span></div></div>
           <div className="location-actions"><input value={postalCode} onChange={(event) => { setPostalCode(event.target.value.replace(/[^0-9]/g, "").slice(0, 5)); setStoreStatus("idle"); setStores([]); }} placeholder="ZIP code" aria-label="ZIP code" maxLength={5} /><select value={storeRadius} onChange={(event) => { setStoreRadius(event.target.value); setStoreStatus("idle"); setStores([]); }} aria-label="Search radius"><option value="5">5 miles</option><option value="10">10 miles</option><option value="25">25 miles</option><option value="50">50 miles</option><option value="100">100 miles</option></select><button className="map-link" type="button" onClick={() => void findNearbyStores()} disabled={storeStatus === "loading"}>{storeStatus === "loading" ? <span className="mini-spinner" /> : <MapPin size={14} />} Find stores</button></div>
         </div>
         {storeError && <div className="store-error">{storeError}</div>}
-        {storeStatus === "loading" && <div className="store-results-loading">Searching nearby Nike store locations…</div>}
-        {storeStatus === "success" && <div className="nearby-store-panel"><div className="nearby-store-heading"><div><strong>{stores.length} Nike {stores.length === 1 ? "location" : "locations"} found</strong><span>Within {storeRadius} miles of {postalCode}</span></div><button type="button" onClick={() => setStoreStatus("idle")}>Hide</button></div>{stores.length === 0 ? <p className="store-empty">No Nike locations were found in the public map directory within this radius. Try a larger distance.</p> : <div className="nearby-store-grid">{stores.map((store) => <article className="nearby-store-card" key={store.id}><div className="nearby-store-top"><strong>{store.name}</strong><span>{store.distanceMiles.toFixed(1)} mi</span></div><div className="store-type">{store.storeType}</div><p>{store.address}</p><a href={store.mapUrl} target="_blank" rel="noreferrer">Directions <ExternalLink size={11} /></a></article>)}</div>}<p className="store-stock-disclaimer">Store locations are sourced from OpenStreetMap and may be incomplete. Distances are straight-line estimates from the ZIP-code centroid, not driving distances. These results do not confirm that the searched product is in stock at any listed store. Check Nike Pickup for size-specific availability.</p></div>}
+        {storeStatus === "loading" && <div className="store-results-loading">Searching nearby sneaker retailer locations…</div>}
+        {storeStatus === "success" && <div className="nearby-store-panel"><div className="nearby-store-heading"><div><strong>{stores.length} nearby retailer {stores.length === 1 ? "location" : "locations"} found</strong><span>Within {storeRadius} miles of {postalCode}</span></div><button type="button" onClick={() => setStoreStatus("idle")}>Hide</button></div>{stores.length === 0 ? <p className="store-empty">No supported sneaker-retailer locations were found in the public map directory within this radius. Try a larger distance.</p> : <div className="nearby-store-grid">{stores.map((store) => <article className="nearby-store-card" key={store.id}><div className="nearby-store-top"><strong>{store.name}</strong><span>{store.distanceMiles.toFixed(1)} mi</span></div><div className="store-type">{store.storeType}</div><p>{store.address}</p><a href={store.mapUrl} target="_blank" rel="noreferrer">Directions <ExternalLink size={11} /></a></article>)}</div>}<p className="store-stock-disclaimer">Retailer locations are sourced from OpenStreetMap and may be incomplete. Distances are straight-line estimates from the ZIP-code centroid, not driving distances. These locations do not confirm the searched product or size is in stock. Contact the store or use its pickup flow to verify.</p></div>}
       </section>
 
       <section className="results-section" id="watchlist">
