@@ -226,3 +226,8 @@ Starter code is provided for personal experimentation. Product data is supplied 
 - Added conservative shared monthly budget reservations: 450 PCKT credits and 200 SerpApi searches, plus 5 uncached comparisons per IP per day. Marketplace calls are disabled when Neon is not available so the monthly ceilings remain enforceable.
 - Expanded ZIP location search to mapped major sneaker retailers. Physical locations are clearly separated from product inventory and never labeled as in-stock without item-specific evidence.
 - All online marketplace/search-engine offers are labeled as unverified for the selected size unless the source provides an explicit size-specific availability field.
+
+
+## v1.7.1 — Impact website verification
+
+This release adds the Impact website ownership verification meta tag to `app/layout.tsx`. After deploying, return to Impact and click **Add Website** to complete verification. No database migration or new environment variables are required.
