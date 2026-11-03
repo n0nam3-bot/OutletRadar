@@ -1,1 +1,171 @@
+name: Apply uploaded project ZIP
 
+on:
+  push:
+    paths:
+      - '*.zip'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-project-zip-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Safely extract and install the uploaded ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import shutil
+          import stat
+          import subprocess
+          import tempfile
+          import zipfile
+          from pathlib import Path, PurePosixPath
+
+          repo = Path.cwd()
+          archives = sorted(p for p in repo.glob("*.zip") if p.is_file())
+
+          if not archives:
+              raise SystemExit(
+                  "No ZIP found in the repository root. Upload one project ZIP "
+                  "to the root of the repository, commit it, and rerun this workflow."
+              )
+          if len(archives) != 1:
+              names = ", ".join(p.name for p in archives)
+              raise SystemExit(
+                  f"Expected exactly one ZIP in the repository root; found: {names}. "
+                  "Remove the extras and commit again."
+              )
+
+          archive = archives[0]
+          ignored_parts = {
+              "__MACOSX", ".git", ".github", "node_modules", ".next",
+              ".vercel", "coverage", "dist", "build", "out", ".turbo"
+          }
+
+          def safe_parts(name: str):
+              normalized = name.replace("\\", "/")
+              path = PurePosixPath(normalized)
+              if path.is_absolute() or not path.parts or any(
+                  part in ("", ".", "..") for part in path.parts
+              ):
+                  raise ValueError(f"Unsafe ZIP path: {name}")
+              if ":" in path.parts[0]:
+                  raise ValueError(f"Unsafe ZIP path: {name}")
+              return path.parts
+
+          with tempfile.TemporaryDirectory(prefix="outlet-radar-update-") as temp_name:
+              stage = Path(temp_name) / "project"
+              stage.mkdir(parents=True)
+
+              with zipfile.ZipFile(archive) as zf:
+                  entries = []
+                  for info in zf.infolist():
+                      if info.is_dir():
+                          continue
+                      parts = safe_parts(info.filename)
+                      if any(part in ignored_parts for part in parts):
+                          continue
+                      base = parts[-1]
+                      if base == ".env" or (
+                          base.startswith(".env.")
+                          and base not in {".env.example", ".env.template"}
+                          and not base.endswith(".example")
+                          and not base.endswith(".template")
+                      ):
+                          continue
+                      if base.lower().endswith(".zip") or base == ".DS_Store":
+                          continue
+                      mode = (info.external_attr >> 16) & 0xFFFF
+                      if stat.S_ISLNK(mode):
+                          raise ValueError(f"Symbolic links are not allowed in ZIPs: {info.filename}")
+                      entries.append((info, parts))
+
+                  if not entries:
+                      raise SystemExit("The ZIP contains no usable project files.")
+
+                  # ChatGPT project ZIPs have a single wrapper folder, such as
+                  # nike-clearance-finder/. Strip it so package.json lands at repo root.
+                  top_levels = {parts[0] for _, parts in entries}
+                  strip_wrapper = len(top_levels) == 1 and all(len(parts) > 1 for _, parts in entries)
+
+                  for info, parts in entries:
+                      relative = parts[1:] if strip_wrapper else parts
+                      if not relative:
+                          continue
+                      destination = stage.joinpath(*relative)
+                      destination.parent.mkdir(parents=True, exist_ok=True)
+                      with zf.open(info, "r") as source, destination.open("wb") as target:
+                          shutil.copyfileobj(source, target)
+
+              package_file = stage / "package.json"
+              if not package_file.is_file():
+                  raise SystemExit(
+                      "Could not find package.json at the ZIP's project root. "
+                      "The archive may not be the Outlet Radar project ZIP."
+                  )
+              package = json.loads(package_file.read_text(encoding="utf-8"))
+              dependencies = {}
+              dependencies.update(package.get("dependencies") or {})
+              dependencies.update(package.get("devDependencies") or {})
+              if "next" not in dependencies:
+                  raise SystemExit("The ZIP's package.json does not identify a Next.js project.")
+
+              # Mirror the ZIP into the repository, removing stale app files while
+              # preserving GitHub workflows, uploaded ZIPs, local secrets, and SQL migrations.
+              rsync_excludes = [
+                  "--exclude=/.git/",
+                  "--exclude=/.github/",
+                  "--exclude=/updates/",
+                  "--exclude=/*.zip",
+                  "--exclude=/node_modules/",
+                  "--exclude=/.next/",
+                  "--exclude=/.vercel/",
+                  "--exclude=/coverage/",
+                  "--exclude=/dist/",
+                  "--exclude=/build/",
+                  "--exclude=/out/",
+                  "--exclude=/.env",
+                  "--exclude=/.env.local",
+                  "--exclude=/.env.production",
+                  "--exclude=/.env.development",
+                  "--exclude=/.env.test",
+                  "--exclude=/.env.*.local",
+                  "--exclude=/*-migration*.sql",
+              ]
+              subprocess.run(
+                  ["rsync", "-a", "--delete", *rsync_excludes, f"{stage}/", f"{repo}/"],
+                  check=True,
+              )
+
+          # Remove the uploaded archive so it does not remain in the source repository.
+          archive.unlink()
+          print(f"Successfully applied {archive.name} to the repository root.")
+          PY
+
+      - name: Commit and push the extracted project
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No repository changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: apply uploaded project ZIP"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
