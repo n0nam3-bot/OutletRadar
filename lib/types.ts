@@ -36,19 +36,7 @@ export type SearchResponse = {
   source: "api.sh";
 };
 
-export type NearbyStore = {
-  id: string;
-  name: string;
-  address: string;
-  city?: string;
-  region?: string;
-  postalCode?: string;
-  latitude: number;
-  longitude: number;
-  distanceMiles: number;
-  storeType: string;
-  mapUrl: string;
-};
+
 
 export type MarketplaceProvider = "stockx" | "goat" | "flightclub" | "kickscrew" | "shopping";
 export type MarketplaceOffer = {

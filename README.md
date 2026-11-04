@@ -1,8 +1,8 @@
-# Outlet Radar — Unified Multi-Brand Search v1.9
+# Outlet Radar — Unified Multi-Brand Search v1.9.1
 
-A multi-brand product discovery and price-comparison platform built with Next.js, Vercel, and Neon Postgres. Browse sneaker, apparel and accessory catalogs by brand, discover models that have not previously been searched in the app, compare online listings across StockX, GOAT, Flight Club, Kicks Crew and Google Shopping merchants such as Foot Locker, Champs Sports and JD Sports, and find nearby retailer addresses by ZIP code. Catalog and retailer searches are cached in Neon to conserve free API credits.
+A multi-brand product discovery and price-comparison platform built with Next.js, Vercel, and Neon Postgres. Browse sneaker, apparel and accessory catalogs by brand, discover models that have not previously been searched in the app, compare online listings across StockX, GOAT, Flight Club, Kicks Crew and Google Shopping merchants such as Foot Locker, Champs Sports and JD Sports. Catalog and retailer searches are cached in Neon to conserve free API credits.
 
-> **Catalog and inventory limitation:** The catalog is a discovery index, not a complete universal product master. StockX/GOAT/Flight Club/Kicks Crew and Google Shopping can reveal models not previously searched in Outlet Radar, including older/discontinued models when those providers index them. A catalog record is not proof of a current listing or size-level availability. Nearby mapped retailer locations do not prove an item is in stock at those stores.
+> **Catalog and inventory limitation:** The catalog is a discovery index, not a complete universal product master. StockX/GOAT/Flight Club/Kicks Crew and Google Shopping can reveal models not previously searched in Outlet Radar, including older/discontinued models when those providers index them. A catalog record is not proof of a current listing or size-level availability. The app does not currently claim physical-store inventory; online listings still require seller checkout verification.
 
 Outlet Radar is an independent comparison platform and is not affiliated with or endorsed by any brand, retailer, or marketplace displayed.
 
@@ -12,11 +12,10 @@ Outlet Radar is an independent comparison platform and is not affiliated with or
 - **Refinements before browsing:** choose product type and brand, then optionally refine by audience, size, price range, color and sale-only. These refinements filter the returned catalog locally and do not make another provider request.
 - **Multi-brand catalog discovery:** discover product models from StockX, GOAT, Flight Club, Kicks Crew and Google Shopping merchant indexes. Products can appear before anyone has searched for them in Outlet Radar; discontinued models may appear when providers still index them.
 - **Cross-retailer comparison:** select a product to compare current online listings from supported marketplaces and retailers, including Foot Locker when returned by Google Shopping.
-- **Nearby retailer directory:** enter a ZIP code and radius to find mapped retailer names, addresses and distances. The directory is independent of Nike and does not claim that a store carries the searched product.
 - **Compact mobile-first layout:** the search controls are in the opening panel; advanced refinements can be expanded when needed. The old separate Nike search section and Nike store-directory link have been removed.
 - **Free-tier protection:** catalog and retailer lookups are cached in Neon, with shared monthly safety ceilings of 450 PCKT credits and 200 SerpApi requests. There is no arbitrary daily search cap per visitor; after a provider safety budget is reached, existing cached results remain available and new uncached requests to that source pause.
 - **Watchlist:** save products from the multi-brand catalog. Neon persistence is enabled when `DATABASE_URL` is configured and the schema has been run. The current automated daily price-history job remains Nike-URL-only; other saved retailer links are retained but are not automatically refreshed yet.
-- **Inventory clarity:** catalog size/color/audience attributes are shown only when a source supplies them. A listed size or online product page is not proof of stock or physical-store inventory.
+- **Inventory clarity:** catalog filters distinguish confirmed attribute matches from possible matches where a provider did not supply size, color, audience, price or sale data. A listed size or online product page is not proof of stock.
 
 ## Version 1.2 changes
 
@@ -85,7 +84,7 @@ Both keys are optional and do not replace `API_SH_KEY`. Do not give either key a
 3. Add it to Vercel as `DATABASE_URL`.
 4. Open Neon's SQL Editor and run the contents of [`db/schema.sql`](./db/schema.sql) if this is a new database or the schema has not already been applied.
 
-The database contains watchlists, price history, legacy hashed search-limit records, Nike direct-search caches, retailer/catalog discovery caches, retailer API monthly-budget counters, a shared PCKT pacing gate, a cached Nike typeahead catalogue, and nearby retailer-location caches. Run the **entire current** `db/schema.sql` in Neon's SQL Editor. It uses `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so it can be run again on an existing project without deleting your existing watchlist or history. If Neon is not configured, live product search still works, but persistent search caching and catalog suggestions are unavailable.
+The database contains watchlists, price history, legacy hashed search-limit records, Nike direct-search caches, retailer/catalog discovery caches, retailer API monthly-budget counters, a shared PCKT pacing gate, and a cached Nike typeahead catalogue. A legacy nearby retailer-location cache table may remain in Neon but is no longer used by the customer-facing UI. Run the **entire current** `db/schema.sql` in Neon's SQL Editor. It uses `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so it can be run again on an existing project without deleting your existing watchlist or history. If Neon is not configured, live product search still works, but persistent search caching and catalog suggestions are unavailable.
 
 ### 4. Deploy to Vercel
 
@@ -122,15 +121,9 @@ Replace the repository contents with this v1.9 project and deploy. If you alread
 
 Do not use a `NEXT_PUBLIC_` prefix for any of these secrets.
 
-## How store availability is handled
+## Physical-store inventory and online availability
 
-The ZIP locator shows mapped locations for multiple sneaker and footwear retailers directly in the app and gives an optional directions link for each store. It is a retailer directory, not a product-specific inventory feed.
-
-The ZIP locator geocodes a five-digit US ZIP through Zippopotam.us, then finds mapped sneaker-retailer locations through OpenStreetMap Overpass and calculates straight-line distance from the ZIP centroid (not driving distance). Store map data can be incomplete or have missing addresses. The app labels Nike Factory/Clearance stores when those words are present in map data, but does not guarantee that the list contains every outlet or retailer. Nearby store results are cached in Neon for 24 hours.
-
-The multi-retailer comparator intentionally does **not** translate an online catalog listing into confirmed stock. v1.7 returns marketplace/merchant names, listing prices when the source exposes them, images and product links. It does not yet perform per-product variant-detail requests for these marketplaces, so selected-size availability remains unverified. The ZIP locator lists physical store addresses from OpenStreetMap only; it cannot confirm the searched product is stocked at those stores. Foot Locker explicitly says store assortment varies by location and size and recommends calling the store to verify.
-
-The app intentionally does **not** translate online shipping size status into store stock. Nike's public help instructions say shoppers can select a product color and size and review participating stores in the Pickup section. The API.SH Nike product API returns public product and online size information, not a public store-by-store inventory feed. A Nike location card is therefore a nearby store, **not a confirmation that the searched shoe is available there**. The **Open product page** action simply opens the product page; Nike may require the shopper to select the color and size before any Pickup options appear.
+The customer-facing application focuses on product discovery and online retailer comparisons. The nearby-store directory has been removed. Outlet Radar does not currently receive a reliable universal physical-store inventory feed. Marketplace catalog records and online listings are not proof that a selected size can be checked out; shoppers should verify size, price, and availability on the seller's current product page.
 
 ## Price monitoring behavior
 
@@ -157,7 +150,6 @@ app/
     health/route.ts
     product/route.ts
     search/route.ts
-    stores/route.ts
     marketplaces/route.ts
     suggest/route.ts
     watchlist/route.ts
@@ -244,3 +236,17 @@ This release adds the Impact website ownership verification meta tag to `app/lay
 - Catalog provider normalization now preserves available price, original price, color, size labels, audience and sale fields when returned by a provider. These fields are optional and remain unavailable when a source does not supply them.
 - Catalog items can be saved to the watchlist through the generic HTTPS listing URL handler. The scheduled API.SH price-history job skips non-Nike retailer URLs until source-specific price tracking is implemented.
 - No new Neon tables or migration are required; existing `retailer_search_cache` and watchlist tables are reused.
+
+
+## v1.9.1 interface and filter refinements
+
+This release removes the nearby retailer directory from the customer-facing UI. Product catalog filters now distinguish a known mismatch from missing provider attributes: known mismatches are excluded, while products with unavailable size/color/audience/price/sale metadata remain visible as possible matches with an explicit note. Confirmed attribute matches are sorted first. Product images use square contained frames for consistent display. No SQL migration is required.
+
+
+## v1.9.1 interface refinements
+
+- Removed the nearby physical-store directory from the customer-facing interface.
+- Size, color, audience, price and sale refinements now keep products with missing provider attributes as clearly labelled possible matches; known mismatches are excluded and verified matches rank first.
+- Size/color attributes are aggregated from product records and retailer listing records.
+- Product card imagery uses square padded frames and `object-fit: contain`.
+- No Neon migration or new environment variables are required.

@@ -3,9 +3,9 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight, Check, ExternalLink, Heart,
-  MapPin, PackageSearch, Search, ShieldCheck, ShoppingBag, SlidersHorizontal, Sparkles, Tag, X,
+  PackageSearch, Search, ShieldCheck, ShoppingBag, SlidersHorizontal, Sparkles, Tag, X,
 } from "lucide-react";
-import type { CatalogBrowseCategory, CatalogBrowseProduct, MarketplaceOffer, MarketplaceSourceStatus, NearbyStore, NikeProduct, ProductSize } from "@/lib/types";
+import type { CatalogBrowseCategory, CatalogBrowseProduct, MarketplaceOffer, MarketplaceSourceStatus, NikeProduct, ProductSize } from "@/lib/types";
 
 type Tab = "search" | "saved";
 type Category = "All" | "Shoes" | "Apparel" | "Accessories" | "Other";
@@ -33,6 +33,106 @@ const VISITOR_KEY = "nike-clearance-finder:visitor:v1";
 function money(value?: number, currency = "USD") {
   if (typeof value !== "number" || !Number.isFinite(value)) return "Price unavailable";
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 2 }).format(value);
+}
+
+function catalogAudience(product: CatalogBrowseProduct): string {
+  const text = `${product.title} ${product.brand}`.toLowerCase();
+  if (/\b(big kids?|grade school|gs|little kids?|preschool|ps|toddler|infant|youth|kids?|boys?|girls?)\b/.test(text)) return "kids";
+  const hasMen = /\b(men|mens|male)\b/.test(text);
+  const hasWomen = /\b(women|womens|female)\b/.test(text);
+  if (hasMen && hasWomen) return "unisex";
+  if (hasMen) return "men";
+  if (hasWomen) return "women";
+  return (product.gender ?? "Unknown").toLowerCase();
+}
+
+function normalizedCatalogSize(value: string): string {
+  return value.toLowerCase().replace(/\b(us|uk|eu|men|mens|women|womens|size)\b/g, " ").replace(/(\d)\s*(y)\b/g, "$1$2").replace(/\s+/g, " ").trim();
+}
+
+function catalogSizesOf(product: CatalogBrowseProduct): string[] {
+  return [...new Set([
+    ...(product.sizes ?? []),
+    ...(product.listings ?? []).flatMap((listing) => listing.sizes ?? []),
+  ].map((value) => String(value).trim()).filter(Boolean))];
+}
+
+function catalogColorsOf(product: CatalogBrowseProduct): string[] {
+  return [...new Set([
+    product.color ?? "",
+    ...(product.colors ?? []),
+    ...(product.listings ?? []).map((listing) => listing.color ?? ""),
+  ].map((value) => value.trim()).filter(Boolean))];
+}
+
+function catalogSizeMatches(candidate: string, requested: string): boolean {
+  const target = normalizedCatalogSize(requested);
+  const value = normalizedCatalogSize(candidate);
+  if (!target || !value) return false;
+  if (value === target) return true;
+  // Compare complete size tokens so 11 does not match 11.5 and 5 does not match 5Y.
+  const targetToken = target.match(/\d+(?:\.\d+)?y?/i)?.[0];
+  if (targetToken) {
+    const candidateTokens = value.match(/\d+(?:\.\d+)?y?/gi) ?? [];
+    return candidateTokens.some((token) => token.toLowerCase() === targetToken.toLowerCase());
+  }
+  return value.includes(target);
+}
+
+function catalogFilterEvaluation(
+  product: CatalogBrowseProduct,
+  filters: { gender: string; size: string; color: string; minPrice: string; maxPrice: string; saleOnly: boolean },
+): { keep: boolean; unknown: string[]; matched: number } {
+  const unknown: string[] = [];
+  let matched = 0;
+  const audience = catalogAudience(product);
+  if (filters.gender !== "all") {
+    if (!audience || audience === "unknown") unknown.push("audience");
+    else if (audience === filters.gender || ((filters.gender === "men" || filters.gender === "women") && audience === "unisex")) matched++;
+    else return { keep: false, unknown, matched };
+  }
+
+  const allSizes = catalogSizesOf(product);
+  if (filters.size.trim()) {
+    if (!allSizes.length) unknown.push("size");
+    else if (allSizes.some((size) => catalogSizeMatches(size, filters.size))) matched++;
+    else return { keep: false, unknown, matched };
+  }
+
+  const allColors = catalogColorsOf(product);
+  if (filters.color.trim()) {
+    if (!allColors.length) unknown.push("color");
+    else if (allColors.some((color) => color.toLowerCase().includes(filters.color.trim().toLowerCase()))) matched++;
+    else return { keep: false, unknown, matched };
+  }
+
+  const prices = [...new Set([
+    ...(typeof product.price === "number" ? [product.price] : []),
+    ...(product.listings ?? []).flatMap((listing) => typeof listing.price === "number" ? [listing.price] : []),
+  ])];
+  const min = filters.minPrice.trim() ? Number(filters.minPrice) : undefined;
+  const max = filters.maxPrice.trim() ? Number(filters.maxPrice) : undefined;
+  const hasPriceFilter = (min !== undefined && Number.isFinite(min)) || (max !== undefined && Number.isFinite(max));
+  if (hasPriceFilter) {
+    if (!prices.length) unknown.push("price");
+    else if (prices.some((price) => (min === undefined || !Number.isFinite(min) || price >= min) && (max === undefined || !Number.isFinite(max) || price <= max))) matched++;
+    else return { keep: false, unknown, matched };
+  }
+
+  if (filters.saleOnly) {
+    const saleSignals: boolean[] = [];
+    if (typeof product.onSale === "boolean") saleSignals.push(product.onSale);
+    for (const listing of product.listings ?? []) {
+      if (typeof listing.onSale === "boolean") saleSignals.push(listing.onSale);
+      if (typeof listing.price === "number" && typeof listing.originalPrice === "number") saleSignals.push(listing.originalPrice > listing.price);
+    }
+    if (typeof product.price === "number" && typeof product.originalPrice === "number") saleSignals.push(product.originalPrice > product.price);
+    if (!saleSignals.length) unknown.push("sale status");
+    else if (saleSignals.some(Boolean)) matched++;
+    else return { keep: false, unknown, matched };
+  }
+
+  return { keep: true, unknown, matched };
 }
 
 function categoryOf(product: NikeProduct): Exclude<Category, "All"> {
@@ -162,11 +262,6 @@ function toWatchlistProduct(product: CatalogBrowseProduct): NikeProduct | null {
 
 export default function Home() {
   const [query, setQuery] = useState("");
-  const [postalCode, setPostalCode] = useState("");
-  const [storeRadius, setStoreRadius] = useState("25");
-  const [stores, setStores] = useState<NearbyStore[]>([]);
-  const [storeStatus, setStoreStatus] = useState<Status>("idle");
-  const [storeError, setStoreError] = useState("");
   const [marketplaceOffers, setMarketplaceOffers] = useState<MarketplaceOffer[]>([]);
   const [marketplaceSources, setMarketplaceSources] = useState<Array<MarketplaceSourceStatus & { key?: string }>>([]);
   const [marketplaceStatus, setMarketplaceStatus] = useState<Status>("idle");
@@ -313,24 +408,28 @@ export default function Home() {
     return [...new Set(labels)].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [availabilityClock, products, saved, sizeDetails, sizeDetailsCheckedAt, tab]);
 
+  const catalogFilters = useMemo(() => ({
+    gender: catalogGender,
+    size: catalogSize,
+    color: catalogColor,
+    minPrice: catalogMinPrice,
+    maxPrice: catalogMaxPrice,
+    saleOnly: catalogSaleOnly,
+  }), [catalogGender, catalogSize, catalogColor, catalogMinPrice, catalogMaxPrice, catalogSaleOnly]);
+
   const catalogVisibleProducts = useMemo(() => {
-    let result = [...catalogProducts];
-    if (catalogGender !== "all") result = result.filter((product) => {
-      const audience = (product.gender ?? "Unknown").toLowerCase();
-      if (catalogGender === "men" || catalogGender === "women") return audience === catalogGender || audience === "unisex";
-      return audience === catalogGender;
-    });
-    const wantedSize = normalizeSizeText(catalogSize);
-    if (wantedSize) result = result.filter((product) => (product.sizes ?? []).some((size) => normalizeSizeText(size) === wantedSize || normalizeSizeText(size).startsWith(`${wantedSize} `)));
-    const wantedColor = catalogColor.trim().toLowerCase();
-    if (wantedColor) result = result.filter((product) => [product.color, ...(product.colors ?? [])].filter(Boolean).some((color) => String(color).toLowerCase().includes(wantedColor)));
-    const min = catalogMinPrice.trim() ? Number(catalogMinPrice) : undefined;
-    const max = catalogMaxPrice.trim() ? Number(catalogMaxPrice) : undefined;
-    if (min !== undefined && Number.isFinite(min)) result = result.filter((product) => product.price !== undefined && product.price >= min);
-    if (max !== undefined && Number.isFinite(max)) result = result.filter((product) => product.price !== undefined && product.price <= max);
-    if (catalogSaleOnly) result = result.filter((product) => product.onSale === true || (product.price !== undefined && product.originalPrice !== undefined && product.originalPrice > product.price));
-    return result;
-  }, [catalogProducts, catalogGender, catalogSize, catalogColor, catalogMinPrice, catalogMaxPrice, catalogSaleOnly]);
+    return catalogProducts
+      .map((product) => ({ product, evaluation: catalogFilterEvaluation(product, catalogFilters) }))
+      .filter(({ evaluation }) => evaluation.keep)
+      // Verified attribute matches are shown first. Items with missing provider data
+      // remain available as candidates instead of disappearing from the catalog.
+      .sort((a, b) => b.evaluation.matched - a.evaluation.matched || a.evaluation.unknown.length - b.evaluation.unknown.length || a.product.title.localeCompare(b.product.title))
+      .map(({ product }) => product);
+  }, [catalogProducts, catalogFilters]);
+
+  const catalogUnverifiedFilterCount = useMemo(() => catalogVisibleProducts.filter(
+    (product) => catalogFilterEvaluation(product, catalogFilters).unknown.length > 0,
+  ).length, [catalogVisibleProducts, catalogFilters]);
 
 
   async function runSearch(searchTerm = query) {
@@ -443,24 +542,6 @@ export default function Home() {
     setMarketplaceError("");
   }
 
-
-  async function findNearbyStores() {
-    const zip = postalCode.trim();
-    if (!/^\d{5}$/.test(zip)) { setStoreError("Enter a valid five-digit US ZIP code."); return; }
-    setStoreStatus("loading");
-    setStoreError("");
-    try {
-      const response = await fetch(`/api/stores?zip=${encodeURIComponent(zip)}&radius=${storeRadius}`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Nearby store search failed.");
-      setStores(Array.isArray(data.stores) ? data.stores : []);
-      setStoreStatus("success");
-    } catch (caught) {
-      setStoreError(caught instanceof Error ? caught.message : "Nearby store search failed.");
-      setStoreStatus("error");
-      setStores([]);
-    }
-  }
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -579,7 +660,6 @@ export default function Home() {
           <a href="#catalog">Catalog</a>
           <a className="nav-compare-link" href="#retailer-comparison">Compare</a>
           <a href="#watchlist" onClick={() => setTab("saved")}>Watchlist <span className="nav-count">{saved.length}</span></a>
-          <a href="#store-locator">Stores</a>
         </nav>
         <div className="topbar-right"><span className="live-dot" /> MULTI-RETAILER SEARCH</div>
       </header>
@@ -611,7 +691,7 @@ export default function Home() {
               <button type="button" className={`sale-toggle search-sale-toggle ${catalogSaleOnly ? "sale-toggle-active" : ""}`} onClick={() => setCatalogSaleOnly((value) => !value)}><Tag size={15} /> Sale only <span className="toggle-switch"><span /></span></button>
               <button type="button" className="clear-refinements" onClick={() => { setCatalogGender("all"); setCatalogSize(""); setCatalogColor(""); setCatalogMinPrice(""); setCatalogMaxPrice(""); setCatalogSaleOnly(false); }}>Clear filters</button>
             </div>}
-            <p className="hunt-note">Filters refine the discovered catalog locally. Size, color, price and sale filters only match details provided by sources; they do not confirm checkout availability.</p>
+            <p className="hunt-note">Filters apply to the same catalog results. Confirmed matches appear first; missing source details stay visible as possible matches. Checkout availability must still be verified with the seller.</p>
           </div>
         </div>
       </section>
@@ -625,7 +705,7 @@ export default function Home() {
         {catalogStatus === "loading" && <div className="store-results-loading">Searching product catalogs across connected marketplaces…</div>}
         {catalogStatus === "idle" && <div className="catalog-explorer-empty"><strong>Start with a model, brand or product type.</strong><span>Browse known models from marketplace catalogs, including older releases that the original brand may no longer sell.</span></div>}
         {catalogStatus === "success" && <div className="catalog-browser-results">
-          <div className="catalog-browser-meta"><strong>{catalogVisibleProducts.length} matching product{catalogVisibleProducts.length === 1 ? "" : "s"}</strong><span>{catalogCachedAt ? `Cached ${new Date(catalogCachedAt).toLocaleString()}` : "Fresh discovery"} · Product data may be cached upstream</span></div>
+          <div className="catalog-browser-meta"><strong>{catalogVisibleProducts.length} product{catalogVisibleProducts.length === 1 ? "" : "s"} {catalogUnverifiedFilterCount ? `· ${catalogVisibleProducts.length - catalogUnverifiedFilterCount} confirmed / ${catalogUnverifiedFilterCount} need more details` : "matching"}</strong><span>{catalogCachedAt ? `Cached ${new Date(catalogCachedAt).toLocaleString()}` : "Fresh discovery"} · Product data may be cached upstream</span></div>
           {catalogSources.length > 0 && <details className="catalog-sources-details"><summary>Sources checked ({catalogSources.filter((source) => source.status === "success").length} successful)</summary><div className="retailer-source-grid">{catalogSources.map((source) => <div className="retailer-source-status" key={`${source.key ?? source.name}-${source.status}`}><strong>{source.name} · {source.status === "success" ? `${source.results} found` : source.status.replaceAll("_", " ")}</strong><span>{source.message}</span></div>)}</div></details>}
           {catalogVisibleProducts.length > 0 ? <div className="catalog-product-grid">{catalogVisibleProducts.map((product) => {
             const savedProduct = toWatchlistProduct(product);
@@ -634,7 +714,8 @@ export default function Home() {
             return <article className="catalog-product-card" key={product.id}>
               <div className="catalog-product-image">{product.imageUrl ? <img src={product.imageUrl} alt={product.title} loading="lazy" /> : <PackageSearch size={28} />}{sale && <span className="catalog-sale-badge">SALE</span>}</div>
               <div className="catalog-product-body"><div className="catalog-product-brand">{product.brand} <span>{product.category.toUpperCase()}</span></div><h3>{product.title}</h3>
-                <div className="catalog-product-facts">{product.gender && product.gender !== "Unknown" ? product.gender : "Audience not listed"}{product.color ? ` · ${product.color}` : ""}{product.sizes?.length ? ` · Sizes ${product.sizes.slice(0, 4).join(", ")}` : ""}</div>
+                <div className="catalog-product-facts">{product.gender && product.gender !== "Unknown" ? product.gender : "Audience not listed"}{catalogColorsOf(product).length ? ` · ${catalogColorsOf(product).slice(0, 2).join(", ")}` : ""}{catalogSizesOf(product).length ? ` · Sizes ${catalogSizesOf(product).slice(0, 4).join(", ")}` : ""}</div>
+                {catalogFilterEvaluation(product, catalogFilters).unknown.length > 0 && <div className="catalog-filter-note">Not provided: {catalogFilterEvaluation(product, catalogFilters).unknown.join(", ")}. Kept as a possible match.</div>}
                 {product.price !== undefined && <div className="catalog-price-row"><strong>{money(product.price, product.currency || "USD")}</strong>{product.originalPrice && product.originalPrice > product.price && <del>{money(product.originalPrice, product.currency || "USD")}</del>}</div>}
                 {product.styleCode && <small>Style / SKU: {product.styleCode}</small>}<div className="catalog-product-sources">Found on {product.sources.join(" · ")}</div>
                 <div className="catalog-card-actions"><button type="button" onClick={() => compareCatalogProduct(product)}>Compare offers <ArrowRight size={13} /></button>{savedProduct && <button type="button" className={`catalog-save-button ${isSaved ? "catalog-save-active" : ""}`} onClick={() => void toggleSaved(savedProduct)} aria-label={isSaved ? "Remove from watchlist" : "Save to watchlist"}><Heart size={15} fill={isSaved ? "currentColor" : "none"} /></button>}</div>
@@ -653,15 +734,9 @@ export default function Home() {
           <div className="retailer-results-meta"><strong>{marketplaceOffers.length} matching online listing{marketplaceOffers.length === 1 ? "" : "s"}</strong><span>{marketplaceCachedAt ? `Cached ${new Date(marketplaceCachedAt).toLocaleString()}` : "Fresh comparison"} · exact size stock not assumed</span></div>
           {marketplaceSources.length > 0 && <details className="catalog-sources-details"><summary>Sources checked</summary><div className="retailer-source-grid">{marketplaceSources.map((source) => <div className="retailer-source-status" key={`${source.key ?? source.name}-${source.status}`}><strong>{source.name} · {source.status === "success" ? `${source.results} found` : source.status.replaceAll("_", " ")}</strong><span>{source.message}</span></div>)}</div></details>}
           {marketplaceOffers.length > 0 ? <div className="retailer-offer-grid">{marketplaceOffers.map((offer) => <article className="retailer-offer-card" key={offer.id}><div className="retailer-offer-image">{offer.imageUrl ? <img src={offer.imageUrl} alt="" loading="lazy" /> : <PackageSearch size={25} />}</div><div className="retailer-offer-body"><div className="retailer-offer-kicker"><span>{offer.retailer}</span><span>ONLINE</span></div><h4>{offer.title}</h4>{offer.styleCode && <small>Style / SKU: {offer.styleCode}</small>}{offer.price !== undefined && <div className="retailer-offer-price"><strong>{money(offer.price, offer.currency)}</strong><span>{offer.priceLabel ?? "Displayed price"}</span></div>}<p className="retailer-offer-stock"><span className="unknown-dot" />{offer.availabilityLabel}</p><a href={offer.url} target="_blank" rel="noreferrer">View listing <ExternalLink size={12} /></a></div></article>)}</div> : <div className="retailer-no-results"><strong>No matching online listings were returned.</strong><span>Check the source statuses above. A product can remain in the catalog after current listings disappear.</span></div>}
-          <p className="store-stock-disclaimer">These are online listings, not confirmed size-level stock. Open the retailer listing to verify the exact size and checkout status. Nearby physical-store locations do not confirm the searched item is stocked there.</p>
+          <p className="store-stock-disclaimer">These are online listings, not confirmed size-level stock. Open the retailer listing to verify the exact size and checkout status.</p>
         </div>}
         {marketplaceStatus === "idle" && <div className="retailer-idle-hint">Choose a product above and press Compare offers. No comparison API request is made while typing or changing filters.</div>}
-      </section>
-
-      <section className="location-section" id="store-locator">
-        <div className="location-strip"><div className="location-intro"><MapPin size={17} /><div><strong>Nearby retailer locations</strong><span>Find sneaker and footwear stores around a ZIP code. Store presence does not confirm item inventory.</span></div></div><div className="location-actions"><input value={postalCode} onChange={(event) => { setPostalCode(event.target.value.replace(/[^0-9]/g, "").slice(0, 5)); setStoreStatus("idle"); setStores([]); }} placeholder="ZIP code" aria-label="ZIP code" maxLength={5} /><select value={storeRadius} onChange={(event) => { setStoreRadius(event.target.value); setStoreStatus("idle"); setStores([]); }} aria-label="Search radius"><option value="5">5 miles</option><option value="10">10 miles</option><option value="25">25 miles</option><option value="50">50 miles</option><option value="100">100 miles</option></select><button className="map-link" type="button" onClick={() => void findNearbyStores()} disabled={storeStatus === "loading"}>{storeStatus === "loading" ? <span className="mini-spinner" /> : <MapPin size={14} />} Find stores</button></div></div>
-        {storeError && <div className="store-error">{storeError}</div>}{storeStatus === "loading" && <div className="store-results-loading">Searching nearby retailer locations…</div>}
-        {storeStatus === "success" && <div className="nearby-store-panel"><div className="nearby-store-heading"><div><strong>{stores.length} nearby retailer {stores.length === 1 ? "location" : "locations"} found</strong><span>Within {storeRadius} miles of {postalCode}</span></div><button type="button" onClick={() => setStoreStatus("idle")}>Hide</button></div>{stores.length === 0 ? <p className="store-empty">No supported retailer locations were found within this radius. Try a larger distance.</p> : <div className="nearby-store-grid">{stores.map((store) => <article className="nearby-store-card" key={store.id}><div className="nearby-store-top"><strong>{store.name}</strong><span>{store.distanceMiles.toFixed(1)} mi</span></div><div className="store-type">{store.storeType}</div><p>{store.address}</p><a href={store.mapUrl} target="_blank" rel="noreferrer">Directions <ExternalLink size={11} /></a></article>)}</div>}<p className="store-stock-disclaimer">Locations are sourced from OpenStreetMap and may be incomplete. Distances are straight-line estimates from the ZIP-code center. These are store locations, not product-level inventory confirmations.</p></div>}
       </section>
 
       <section className="watchlist-section" id="watchlist">
@@ -670,7 +745,7 @@ export default function Home() {
         {saved.length ? <div className="watchlist-grid">{saved.map((product) => <article className="watchlist-card" key={product.url}>{product.imageUrl ? <img src={product.imageUrl} alt="" /> : <PackageSearch size={26} />}<div><strong>{product.title}</strong><small>{product.subtitle || product.styleCode || "Saved product"}</small><span>{money(product.price, product.currency)}</span><a href={product.url} target="_blank" rel="noreferrer">Open listing <ExternalLink size={11} /></a></div><button type="button" onClick={() => void toggleSaved(product)} aria-label="Remove from watchlist"><X size={15} /></button></article>)}</div> : <div className="catalog-explorer-empty"><strong>No saved products yet.</strong><span>Save a model from the catalog using its bookmark icon.</span></div>}
       </section>
 
-      <footer className="footer"><div className="footer-brand">OUTLET<span>RADAR</span></div><div className="footer-copy">Independent product-discovery and price-comparison platform. Not affiliated with or endorsed by the brands, retailers or marketplaces displayed. Outlet Radar may earn commissions from qualifying purchases.</div><div className="footer-links"><a href="#catalog">Browse catalog</a><a href="#store-locator">Nearby retailers</a><a className="nav-compare-link" href="#retailer-comparison">Compare</a></div></footer>
+      <footer className="footer"><div className="footer-brand">OUTLET<span>RADAR</span></div><div className="footer-copy">Independent product-discovery and price-comparison platform. Not affiliated with or endorsed by the brands, retailers or marketplaces displayed. Outlet Radar may earn commissions from qualifying purchases.</div><div className="footer-links"><a href="#catalog">Browse catalog</a><a className="nav-compare-link" href="#retailer-comparison">Compare</a></div></footer>
     </main>
   );
 }

@@ -82,7 +82,7 @@ function textValues(...values: unknown[]): string[] {
         else {
           const record = obj(item);
           if (record) {
-            const label = str(record.size, record.label, record.name, record.value, record.size_label, record.sizeName);
+            const label = str(record.size, record.label, record.name, record.value, record.size_label, record.sizeName, record.size_name, record.display_value, record.displayValue);
             if (label) found.push(label);
           }
         }
@@ -107,8 +107,8 @@ function catalogFields(item: Record<string, unknown>, title: string) {
   const price = num(item.extracted_price, item.price, item.lowest_price, item.current_price, item.sale_price, item.amount);
   const originalPrice = num(item.old_price, item.original_price, item.retail_price, item.full_price, item.compare_at_price, item.msrp);
   const explicitSale = bool(item.on_sale, item.onSale, item.is_sale, item.isSale, item.sale, item.clearance);
-  const sizes = textValues(item.sizes, item.available_sizes, item.size_options, item.sizeOptions, item.variants);
-  const colors = textValues(item.color, item.colour, item.colorway, item.color_name, item.colorName, item.colors);
+  const sizes = textValues(item.sizes, item.available_sizes, item.availableSizes, item.size_options, item.sizeOptions, item.size_variants, item.sizeVariants, item.variants);
+  const colors = textValues(item.color, item.colour, item.colorway, item.color_name, item.colorName, item.colors, item.color_options, item.colorOptions);
   return {
     price,
     originalPrice,
@@ -116,7 +116,7 @@ function catalogFields(item: Record<string, unknown>, title: string) {
     gender: inferGender(item, title),
     sizes: sizes.length ? sizes : undefined,
     color: colors[0],
-    onSale: explicitSale ?? (price !== undefined && originalPrice !== undefined && originalPrice > price),
+    onSale: explicitSale ?? (price !== undefined && originalPrice !== undefined ? originalPrice > price : undefined),
   };
 }
 
