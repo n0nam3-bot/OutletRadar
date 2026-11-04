@@ -1,4 +1,4 @@
-# Outlet Radar — Unified Multi-Brand Search v1.9.2
+# Outlet Radar — Unified Multi-Brand Search v1.9.3
 
 A multi-brand product discovery and price-comparison platform built with Next.js, Vercel, and Neon Postgres. Browse sneaker, apparel and accessory catalogs by brand, discover models that have not previously been searched in the app, compare online listings across StockX, GOAT, Flight Club, Kicks Crew and Google Shopping merchants such as Foot Locker, Champs Sports and JD Sports. Catalog and retailer searches are cached in Neon to conserve free API credits.
 
@@ -17,6 +17,12 @@ Outlet Radar is an independent comparison platform and is not affiliated with or
 - **Watchlist:** save products from the multi-brand catalog. Neon persistence is enabled when `DATABASE_URL` is configured and the schema has been run. The current automated daily price-history job remains Nike-URL-only; other saved retailer links are retained but are not automatically refreshed yet.
 - **Product imagery:** the catalog extracts product artwork from multiple provider image fields and hydrates up to 16 image-less models per uncached browse using cached StockX, GOAT or Flight Club product details. Some source records still do not include an image.
 - **Inventory clarity:** catalog filters use attributes actually supplied by sources. Comparison size signals distinguish StockX active asks, GOAT size-availability flags and Flight Club listed new sizes; these are not final checkout guarantees.
+
+## Version 1.9.3 changes
+
+- Fixed the multi-argument numeric parser used by Flight Club size/price details; it now selects the first valid non-negative value from the provider fallback fields.
+- Added explicit TypeScript narrowing for StockX/GOAT product-detail image lookups.
+- No Neon migration or new environment variables required.
 
 ## Version 1.9.2 changes
 

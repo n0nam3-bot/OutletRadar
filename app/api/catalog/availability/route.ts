@@ -19,11 +19,13 @@ function str(...values: unknown[]): string {
   for (const value of values) if (typeof value === "string" && value.trim()) return value.trim();
   return "";
 }
-function num(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value.replace(/[^0-9.]/g, ""));
-    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+function num(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value.replace(/[^0-9.]/g, ""));
+      if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+    }
   }
   return undefined;
 }
@@ -409,6 +411,9 @@ export async function POST(request: NextRequest) {
       .filter((entry) => entry.source === "stockx" || entry.source === "goat")
       .slice(0, 2);
     for (const listing of imageListings) {
+      // Keep the source narrowing explicit for TypeScript before calling the
+      // StockX/GOAT-only product-detail endpoint.
+      if (listing.source !== "stockx" && listing.source !== "goat") continue;
       try {
         const cached = await fetchCachedProviderImage(listing.source, listing.providerProductId, apiKey);
         if (!cached) continue;

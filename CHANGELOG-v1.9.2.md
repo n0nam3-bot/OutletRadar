@@ -8,3 +8,7 @@
 - Comparison selection collapses the original hero/catalog, keeps a compact “Comparing now” return bar, and automatically scrolls to the comparison panel.
 - No database migration or new environment variables required.
 - Provider-specific size signals remain distinct: StockX active asks, GOAT availability flags, and Flight Club listed new sizes. They are not checkout guarantees.
+
+### Build hotfix (v1.9.2.1)
+- Fixed the availability route's numeric parser to accept multiple candidate fields, matching its StockX/GOAT/Flight Club parsing calls.
+- Keeps the first valid non-negative number, so cents/price fallback behavior is preserved.
