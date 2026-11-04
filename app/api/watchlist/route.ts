@@ -11,7 +11,11 @@ function safeProductUrl(value: unknown): value is string {
   if (typeof value !== "string") return false;
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && (url.hostname === "nike.com" || url.hostname.endsWith(".nike.com"));
+    const host = url.hostname.toLowerCase();
+    // Catalog products can come from many HTTPS retailer/marketplace domains.
+    // Do not store credentials, local hosts, IP literals, or non-HTTPS links.
+    return url.protocol === "https:" && !url.username && !url.password && host.includes(".") &&
+      host !== "localhost" && !host.endsWith(".local") && !/^\d{1,3}(\.\d{1,3}){3}$/.test(host);
   } catch { return false; }
 }
 

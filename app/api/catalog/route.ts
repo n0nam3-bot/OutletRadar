@@ -20,7 +20,10 @@ const pcktSources = [
 ] as const;
 type PcktKey = typeof pcktSources[number]["key"];
 
-type InternalListing = CatalogListing & { brand: string; title: string; category: CatalogBrowseCategory; imageUrl?: string; styleCode?: string };
+type InternalListing = CatalogListing & {
+  brand: string; title: string; category: CatalogBrowseCategory;
+  imageUrl?: string; styleCode?: string;
+};
 
 const BRAND_QUERY_TERMS: Record<string, string> = {
   nike: "Nike", jordan: "Jordan", adidas: "Adidas", "new balance": "New Balance", asics: "ASICS",
@@ -56,6 +59,67 @@ function num(...values: unknown[]): number | undefined {
 function norm(value: string): string {
   return value.toLowerCase().normalize("NFKD").replace(/[’']/g, "").replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
+
+function bool(...values: unknown[]): boolean | undefined {
+  for (const value of values) {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number" && (value === 0 || value === 1)) return value === 1;
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (["true", "yes", "on", "sale", "clearance"].includes(normalized)) return true;
+      if (["false", "no", "off", "regular"].includes(normalized)) return false;
+    }
+  }
+  return undefined;
+}
+function textValues(...values: unknown[]): string[] {
+  const found: string[] = [];
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) found.push(value.trim());
+    else if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === "string" && item.trim()) found.push(item.trim());
+        else {
+          const record = obj(item);
+          if (record) {
+            const label = str(record.size, record.label, record.name, record.value, record.size_label, record.sizeName);
+            if (label) found.push(label);
+          }
+        }
+      }
+    }
+  }
+  return [...new Set(found)];
+}
+function inferGender(item: Record<string, unknown>, title: string): NonNullable<CatalogBrowseProduct["gender"]> {
+  const raw = norm(str(item.gender, item.audience, item.department, item.target_gender, item.product_gender));
+  const descriptor = `${norm(title)} ${norm(str(item.description, item.product_type, item.category))} ${raw}`;
+  if (/\b(big kids?|grade school|gs|little kids?|preschool|ps|toddler|infant|youth|kids?|boys?|girls?)\b/.test(descriptor)) return "Kids";
+  const hasMen = /\b(men|mens|male)\b/.test(descriptor);
+  const hasWomen = /\b(women|womens|female)\b/.test(descriptor);
+  if (hasMen && hasWomen) return "Unisex";
+  if (hasMen) return "Men";
+  if (hasWomen) return "Women";
+  if (/\b(unisex|all gender|adult)\b/.test(descriptor) || raw === "unisex") return "Unisex";
+  return "Unknown";
+}
+function catalogFields(item: Record<string, unknown>, title: string) {
+  const price = num(item.extracted_price, item.price, item.lowest_price, item.current_price, item.sale_price, item.amount);
+  const originalPrice = num(item.old_price, item.original_price, item.retail_price, item.full_price, item.compare_at_price, item.msrp);
+  const explicitSale = bool(item.on_sale, item.onSale, item.is_sale, item.isSale, item.sale, item.clearance);
+  const sizes = textValues(item.sizes, item.available_sizes, item.size_options, item.sizeOptions, item.variants);
+  const colors = textValues(item.color, item.colour, item.colorway, item.color_name, item.colorName, item.colors);
+  return {
+    price,
+    originalPrice,
+    currency: str(item.currency, item.currency_code, item.price_currency, "USD").toUpperCase(),
+    gender: inferGender(item, title),
+    sizes: sizes.length ? sizes : undefined,
+    color: colors[0],
+    onSale: explicitSale ?? (price !== undefined && originalPrice !== undefined && originalPrice > price),
+  };
+}
+
 function httpUrl(raw: string): string {
   try { const url = new URL(raw); return ["http:", "https:"].includes(url.protocol) ? url.toString() : ""; }
   catch { return ""; }
@@ -139,6 +203,20 @@ function matchesCategory(item: Record<string, unknown>, title: string, selected:
   }
   return true;
 }
+function matchesModelNumbers(title: string, item: Record<string, unknown>, query: string): boolean {
+  const requested: string[] = query.match(/\d+(?:\.\d+)?/g) ?? [];
+  if (!requested.length) return true;
+  const searchable = [title, str(item.style_code, item.styleCode, item.sku, item.product_code, item.description)].join(" ");
+  const returned: string[] = searchable.match(/\d+(?:\.\d+)?/g) ?? [];
+  return requested.every((number) => returned.includes(number));
+}
+function inferCatalogCategory(item: Record<string, unknown>, title: string): CatalogBrowseCategory {
+  const text = `${categoryText(item)} ${norm(title)} ${norm(str(item.description, item.model, item.name))}`;
+  if (/\b(apparel|clothing|streetwear|outerwear|shirt|hoodie|sweatshirt|sweater|jacket|pants|shorts|jersey|tee|leggings|fleece)\b/.test(text)) return "apparel";
+  if (/\b(accessor|bag|backpack|cap|hat|sock|wallet|belt|bottle|glove|beanie)\b/.test(text)) return "accessories";
+  if (/\b(sneaker|shoe|footwear|cleat|boot|runner|jordan|dunk|air max|samba|gazelle|990|9060)\b/.test(text)) return "sneakers";
+  return "all";
+}
 function sourceProductUrl(source: PcktKey, item: Record<string, unknown>): string {
   const hosts: Record<PcktKey, string> = { stockx: "stockx.com", goat: "goat.com", flightclub: "flightclub.com", kickscrew: "kickscrew.com" };
   const raw = httpUrl(str(item.url, item.link, item.product_url, item.productUrl, item.product_link));
@@ -163,32 +241,34 @@ function sourceProductUrl(source: PcktKey, item: Record<string, unknown>): strin
 function typeLabel(category: CatalogBrowseCategory) {
   return category === "sneakers" ? "sneakers" : category === "apparel" ? "apparel" : category === "accessories" ? "accessories" : "products";
 }
-function normalizePckt(source: PcktKey, item: Record<string, unknown>, brandFilter: string, category: CatalogBrowseCategory): InternalListing | null {
+function normalizePckt(source: PcktKey, item: Record<string, unknown>, brandFilter: string, category: CatalogBrowseCategory, searchQuery: string): InternalListing | null {
   const title = str(item.title, item.name, item.productName, item.product_name, item.display_name, item.product_title, item.model_name, item.model);
   if (!title) return null;
   const brand = inferBrand(str(item.brand, item.brandName, item.manufacturer), title, brandFilter);
-  if (!matchesBrand(brand, title, brandFilter) || !matchesCategory(item, title, category, source)) return null;
+  if (!matchesBrand(brand, title, brandFilter) || !matchesCategory(item, title, category, source) || !matchesModelNumbers(title, item, searchQuery)) return null;
   const url = sourceProductUrl(source, item);
   if (!url) return null;
   const name = pcktSources.find((entry) => entry.key === source)?.name ?? source;
   return {
     source, retailer: name, url,
     title: str(item.title, item.display_name, item.product_title, item.name, item.model_name, item.model),
-    brand, category,
-    imageUrl: httpUrl(str(item.image_url, item.imageUrl, item.mainPictureUrl, item.gridPictureUrl, item.thumbnail)) || undefined,
-    styleCode: str(item.sku, item.style_code, item.styleCode, item.product_code) || undefined,
+    brand, category: category === "all" ? inferCatalogCategory(item, title) : category,
+    imageUrl: httpUrl(str(item.image_url, item.imageUrl, item.mainPictureUrl, item.gridPictureUrl, item.thumbnail, item.image)) || undefined,
+    styleCode: str(item.sku, item.style_code, item.styleCode, item.product_code, item.product_id) || undefined,
+    ...catalogFields(item, title),
   };
 }
-function normalizeShopping(item: Record<string, unknown>, brandFilter: string, category: CatalogBrowseCategory): InternalListing | null {
+function normalizeShopping(item: Record<string, unknown>, brandFilter: string, category: CatalogBrowseCategory, searchQuery: string): InternalListing | null {
   const title = str(item.title, item.product_title);
   const brand = inferBrand(str(item.brand, item.manufacturer), title, brandFilter);
   const retailer = str(item.source, item.seller, item.merchant, item.store);
   const url = httpUrl(str(item.product_link, item.link, item.url));
-  if (!title || !retailer || !url || !matchesBrand(brand, title, brandFilter) || !matchesCategory(item, title, category, "shopping")) return null;
+  if (!title || !retailer || !url || !matchesBrand(brand, title, brandFilter) || !matchesCategory(item, title, category, "shopping") || !matchesModelNumbers(title, item, searchQuery)) return null;
   return {
-    source: "shopping", retailer, url, title, brand, category,
-    imageUrl: httpUrl(str(item.thumbnail, item.image)) || undefined,
+    source: "shopping", retailer, url, title, brand, category: category === "all" ? inferCatalogCategory(item, title) : category,
+    imageUrl: httpUrl(str(item.thumbnail, item.image, item.image_url)) || undefined,
     styleCode: str(item.product_id, item.sku, item.gtin) || undefined,
+    ...catalogFields(item, title),
   };
 }
 function groupListings(listings: InternalListing[]): CatalogBrowseProduct[] {
@@ -205,13 +285,31 @@ function groupListings(listings: InternalListing[]): CatalogBrowseProduct[] {
         styleCode: listing.styleCode,
         imageUrl: listing.imageUrl,
         sources: [listing.retailer],
-        listings: [{ source: listing.source, retailer: listing.retailer, url: listing.url }],
+        listings: [{ source: listing.source, retailer: listing.retailer, url: listing.url, price: listing.price, originalPrice: listing.originalPrice, currency: listing.currency, color: listing.color, sizes: listing.sizes, gender: listing.gender, onSale: listing.onSale }],
+        price: listing.price,
+        originalPrice: listing.originalPrice,
+        currency: listing.currency,
+        color: listing.color,
+        colors: listing.color ? [listing.color] : [],
+        sizes: listing.sizes ?? [],
+        gender: listing.gender ?? "Unknown",
+        onSale: listing.onSale,
       });
     } else {
       if (!current.imageUrl && listing.imageUrl) current.imageUrl = listing.imageUrl;
       if (!current.styleCode && listing.styleCode) current.styleCode = listing.styleCode;
       if (!current.sources.includes(listing.retailer)) current.sources.push(listing.retailer);
-      current.listings.push({ source: listing.source, retailer: listing.retailer, url: listing.url });
+      current.listings.push({ source: listing.source, retailer: listing.retailer, url: listing.url, price: listing.price, originalPrice: listing.originalPrice, currency: listing.currency, color: listing.color, sizes: listing.sizes, gender: listing.gender, onSale: listing.onSale });
+      if (listing.price !== undefined && (current.price === undefined || listing.price < current.price)) {
+        current.price = listing.price;
+        current.originalPrice = listing.originalPrice;
+        current.currency = listing.currency || current.currency || "USD";
+      }
+      if ((!current.color || current.color === "") && listing.color) current.color = listing.color;
+      if (listing.color && !current.colors?.some((value) => norm(value) === norm(listing.color!))) current.colors = [...(current.colors ?? []), listing.color];
+      if (listing.sizes?.length) current.sizes = [...new Set([...(current.sizes ?? []), ...listing.sizes])];
+      if ((!current.gender || current.gender === "Unknown") && listing.gender && listing.gender !== "Unknown") current.gender = listing.gender;
+      if (listing.onSale !== undefined) current.onSale = current.onSale === true || listing.onSale;
     }
   }
   return [...grouped.values()].sort((a, b) => a.title.localeCompare(b.title)).slice(0, 72);
@@ -284,7 +382,16 @@ export async function GET(request: NextRequest) {
 
   const pcktKey = process.env.PCKT_API_KEY;
   const serpKey = process.env.SERPAPI_API_KEY;
-  const cacheIdentity = `catalog:${category}:${brandValue}`;
+  const userQuery = (request.nextUrl.searchParams.get("q") ?? "").trim().slice(0, 100);
+  const brandSearchTerm = brandValue === "all" ? "" : (BRAND_QUERY_TERMS[brandValue] ?? brandValue);
+  const queryContainsBrand = Boolean(brandSearchTerm && norm(userQuery).includes(norm(brandSearchTerm)));
+  const queryParts = userQuery
+    ? (brandSearchTerm && !queryContainsBrand ? [brandSearchTerm, userQuery] : [userQuery])
+    : [brandSearchTerm].filter(Boolean);
+  const searchTerm = category === "sneakers" || category === "all"
+    ? (queryParts.join(" ") || "sneakers")
+    : [...queryParts, typeLabel(category)].filter(Boolean).join(" ") || typeLabel(category);
+  const cacheIdentity = `catalog:${category}:${brandValue}:${norm(userQuery)}`;
   const cacheKey = createHash("sha256").update(cacheIdentity).digest("hex");
   try {
     const cached = await readCache(cacheKey);
@@ -296,18 +403,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Could not read the retailer catalog cache in Neon. Confirm that retailer_search_cache exists and that DATABASE_URL points to the intended Neon branch." }, { status: 503 });
   }
 
-  // Footwear marketplaces index sneakers primarily by brand/model text; adding the
-  // word "sneakers" can over-narrow searches such as Jordan 4. Apparel/accessory
-  // discovery uses a category-qualified query because those catalogs are broader.
-  const brandSearchTerm = brandValue === "all" ? "" : (BRAND_QUERY_TERMS[brandValue] ?? brandValue);
-  const searchTerm = category === "sneakers"
-    ? (brandSearchTerm || "sneakers")
-    : [brandSearchTerm, typeLabel(category)].filter(Boolean).join(" ") || typeLabel(category);
+  // Search terms are provider discovery inputs. Gender, size, color, price and
+  // sale refinements stay client-side, so changing them never spends another credit.
   const listings: InternalListing[] = [];
   const sources: Array<MarketplaceSourceStatus & { key?: string }> = [];
 
   for (const source of pcktSources) {
-    if (!source.categories.includes(category)) {
+    if (category !== "all" && !source.categories.includes(category)) {
       sources.push({ key: source.key, name: source.name, status: "success", results: 0, message: "Not queried for this product type; this provider is configured here as a footwear catalog source." });
       continue;
     }
@@ -324,7 +426,7 @@ export async function GET(request: NextRequest) {
       const url = new URL(`https://api.pckt.sh${source.path}`);
       Object.entries(source.params(searchTerm || "sneakers")).forEach(([key, value]) => url.searchParams.set(key, value));
       const payload = await fetchJson(url, { Authorization: `Bearer ${pcktKey}`, Accept: "application/json" });
-      const found = records(payload).map((item) => normalizePckt(source.key, item, brandValue, category)).filter((item): item is InternalListing => !!item);
+      const found = records(payload).map((item) => normalizePckt(source.key, item, brandValue, category, userQuery)).filter((item): item is InternalListing => !!item);
       listings.push(...found);
       sources.push({ key: source.key, name: source.name, status: "success", results: found.length, message: found.length ? `${found.length} catalog record(s) discovered. Current size-level availability is not implied.` : "No matching catalog entries were returned for this brand/type combination." });
     } catch (error) {
@@ -339,7 +441,7 @@ export async function GET(request: NextRequest) {
   } else {
     try {
       const url = new URL("https://serpapi.com/search.json");
-      const shoppingQuery = [brandSearchTerm, typeLabel(category)].filter(Boolean).join(" ") || "sneakers";
+      const shoppingQuery = category === "sneakers" || category === "all" ? (searchTerm || "sneakers") : searchTerm;
       url.searchParams.set("engine", "google_shopping");
       url.searchParams.set("q", shoppingQuery);
       url.searchParams.set("gl", "us");
@@ -348,7 +450,7 @@ export async function GET(request: NextRequest) {
       const payload = obj(await fetchJson(url)) ?? {};
       const shopping = Array.isArray(payload.shopping_results) ? payload.shopping_results : [];
       const found = shopping.map(obj).filter((item): item is Record<string, unknown> => !!item)
-        .map((item) => normalizeShopping(item, brandValue, category)).filter((item): item is InternalListing => !!item);
+        .map((item) => normalizeShopping(item, brandValue, category, userQuery)).filter((item): item is InternalListing => !!item);
       listings.push(...found);
       sources.push({ key: "shopping", name: "Google Shopping merchants", status: "success", results: found.length, message: found.length ? `${found.length} merchant listing(s) discovered. Exact size and stock must be checked with the seller.` : "No matching merchant catalog entries were returned." });
     } catch (error) {
@@ -357,8 +459,8 @@ export async function GET(request: NextRequest) {
   }
 
   const products = groupListings(listings);
-  const cacheQuery = `catalog: ${category} / ${brandValue}`;
+  const cacheQuery = `catalog: ${category} / ${brandValue} / ${userQuery || "all models"}`;
   try { await writeCache(cacheKey, cacheQuery, products, sources); }
   catch { /* keep discovery results visible if a nonessential cache write fails */ }
-  return NextResponse.json({ category, brand: brandValue, products, sources, cached: false, cacheHours: CACHE_HOURS, note: "Catalog records include historical/discontinued product models where indexed by providers. A catalog record does not establish a current retailer offer or size availability." });
+  return NextResponse.json({ category, brand: brandValue, query: userQuery, products, sources, cached: false, cacheHours: CACHE_HOURS, note: "Catalog records include historical/discontinued product models where indexed by providers. A catalog record does not establish a current retailer offer or size availability." });
 }

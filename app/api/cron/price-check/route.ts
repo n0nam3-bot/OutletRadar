@@ -23,7 +23,8 @@ export async function GET(request: NextRequest) {
     rows = await sql`
       SELECT id::text, product_url, title
       FROM watched_products
-      WHERE last_checked_at IS NULL OR last_checked_at < now() - interval '22 hours'
+      WHERE (last_checked_at IS NULL OR last_checked_at < now() - interval '22 hours')
+        AND product_url ~* '^https://([a-z0-9-]+[.])*nike[.]com/'
       ORDER BY last_checked_at NULLS FIRST, created_at ASC
       LIMIT ${limit}
     ` as Record<string, unknown>[];
@@ -66,5 +67,5 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, checked, failed, dailyLimit: limit, note: "Price and size data are online product data, not physical-store stock." });
+  return NextResponse.json({ ok: true, checked, failed, dailyLimit: limit, note: "Automated API.SH price history currently applies only to Nike product URLs. Other retailer watchlist links remain saved but are not automatically checked by this Nike-specific job." });
 }

@@ -74,6 +74,13 @@ export type CatalogListing = {
   source: MarketplaceProvider;
   retailer: string;
   url: string;
+  price?: number;
+  originalPrice?: number;
+  currency?: string;
+  color?: string;
+  sizes?: string[];
+  gender?: ProductGender;
+  onSale?: boolean;
 };
 export type CatalogBrowseProduct = {
   id: string;
@@ -84,6 +91,15 @@ export type CatalogBrowseProduct = {
   imageUrl?: string;
   sources: string[];
   listings: CatalogListing[];
+  /** Best price observed among catalog listings; not a checkout quote. */
+  price?: number;
+  originalPrice?: number;
+  currency?: string;
+  color?: string;
+  colors?: string[];
+  sizes?: string[];
+  gender?: ProductGender;
+  onSale?: boolean;
 };
 
 export type MarketplaceSourceStatus = {
