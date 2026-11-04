@@ -643,7 +643,7 @@ export default function Home() {
         if (candidates.length) {
           try {
             const availabilityResponse = await fetch("/api/catalog/availability", {
-              method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ products: candidates }),
+              method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ audience: catalogGender, products: candidates.map((product) => ({ ...product, audience: catalogGender })) }),
             });
             const availabilityData = await availabilityResponse.json();
             if (availabilityResponse.ok && Array.isArray(availabilityData.checks)) {
@@ -670,8 +670,9 @@ export default function Home() {
       const response = await fetch("/api/catalog/availability", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ products: [{
+        body: JSON.stringify({ audience: catalogGender, products: [{
           catalogProductId: product.id,
+          audience: catalogGender,
           needsImage: !(product.imageUrl || (product.listings ?? []).some((listing) => listing.imageUrl)),
           listings: (product.listings ?? []).filter((listing) => (listing.source === "stockx" || listing.source === "goat" || listing.source === "flightclub") && listing.providerProductId).map((listing) => ({
             source: listing.source, providerProductId: listing.providerProductId, retailer: listing.retailer, gender: listing.gender && listing.gender !== "Unknown" ? listing.gender : product.gender,
@@ -726,7 +727,7 @@ export default function Home() {
     const comparisonRequest = fetch("/api/catalog/offers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ product }),
+      body: JSON.stringify({ product, audience: catalogGender }),
     }).then(async (response) => {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Could not compare this exact product.");
@@ -953,7 +954,7 @@ export default function Home() {
                 <div className="catalog-card-actions"><button type="button" aria-expanded={expanded} aria-controls={`catalog-offers-${product.id}`} onClick={() => void compareCatalogProduct(product)}>{expanded ? "Hide offers" : "Compare offers"} <ArrowRight size={13} /></button>{savedProduct && <button type="button" className={`catalog-save-button ${isSaved ? "catalog-save-active" : ""}`} onClick={() => void toggleSaved(savedProduct)} aria-label={isSaved ? "Remove from watchlist" : "Save to watchlist"}><Heart size={15} fill={isSaved ? "currentColor" : "none"} /></button>}</div>
               </div>
               {expanded && <div className="catalog-inline-comparison" id={`catalog-offers-${product.id}`}>
-                <div className="catalog-inline-head"><div><span className="eyebrow dark-eyebrow">EXACT PRODUCT OFFERS</span><strong>{product.title}</strong><small>{product.brand}{product.styleCode ? ` · Style ${product.styleCode}` : ""}{product.releaseYear ? ` · ${product.releaseYear}` : ""}</small></div><button type="button" onClick={() => { setActiveCompareProduct(null); setMarketplaceOffers([]); setMarketplaceStatus("idle"); setMarketplaceSizeQuotes([]); setMarketplaceSizeStatus("idle"); }}>Close</button></div>
+                <div className="catalog-inline-head"><div><span className="eyebrow dark-eyebrow">EXACT PRODUCT OFFERS{catalogGender !== "all" ? ` · ${catalogGender.toUpperCase()}` : ""}</span><strong>{product.title}</strong><small>{product.brand}{product.styleCode ? ` · Style ${product.styleCode}` : ""}{product.releaseYear ? ` · ${product.releaseYear}` : ""}{catalogGender === "men" ? " · Adult men only; PS/GS/youth offers excluded" : catalogGender === "women" ? " · Adult women only; PS/GS/youth offers excluded" : catalogGender === "kids" ? " · Kids/youth sizing only" : ""}</small></div><button type="button" onClick={() => { setActiveCompareProduct(null); setMarketplaceOffers([]); setMarketplaceStatus("idle"); setMarketplaceSizeQuotes([]); setMarketplaceSizeStatus("idle"); }}>Close</button></div>
                 {marketplaceError && <div className="store-error">{marketplaceError}</div>}
                 {marketplaceSizeStatus === "error" && marketplaceSizeSources.map((source) => <div className="catalog-filter-summary" key={source.name}>{source.name}: {source.message}</div>)}
                 {(marketplaceStatus === "loading" || marketplaceSizeStatus === "loading") && <div className="store-results-loading">Checking this product's grouped retailer listings and size feeds…</div>}

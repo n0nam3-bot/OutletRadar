@@ -278,3 +278,8 @@ This release removes the nearby retailer directory from the customer-facing UI. 
 - Size/color attributes are aggregated from product records and retailer listing records.
 - Product card imagery uses square padded frames and `object-fit: contain`.
 - No Neon migration or new environment variables are required.
+
+
+## v2.0.1 audience filtering
+
+Retailer offers and size quotes now respect the selected audience. Men and Women views exclude explicit youth/PS/GS variants, and numeric sizes without a known sizing system are not presented as adult sizes. No database migration is required.

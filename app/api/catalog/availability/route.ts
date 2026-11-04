@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { filterSizeQuotesForAudience, inferSizeSystem } from "@/lib/audience";
 import type { MarketplaceSizeQuote } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -9,7 +10,7 @@ export const maxDuration = 45;
 const PCKT_MONTHLY_BUDGET = 450;
 type QuoteSource = "stockx" | "goat" | "flightclub";
 type ListingRef = { source: QuoteSource; providerProductId: string; retailer: string; catalogProductId: string; gender?: string };
-type ProductRef = { catalogProductId: string; listings: ListingRef[]; needsImage: boolean };
+type ProductRef = { catalogProductId: string; listings: ListingRef[]; needsImage: boolean; audience: string };
 type CachedDetail = { quotes: MarketplaceSizeQuote[]; imageUrl?: string; colors?: string[]; gender?: string };
 
 function obj(value: unknown): Record<string, unknown> | null {
@@ -91,16 +92,11 @@ function imageUrlFromItem(record: Record<string, unknown>): string | undefined {
   }
   return undefined;
 }
-function sizeSystem(baseType: string): MarketplaceSizeQuote["sizeSystem"] {
-  const text = baseType.toLowerCase().replace(/[_-]+/g, " ");
-  if (/women|female|\bus\s*w\b/.test(text)) return "women";
-  if (/youth|grade|kids|boys|girls|\bus\s*y\b/.test(text)) return "youth";
-  if (/men|male|\bus\s*m\b/.test(text)) return "men";
-  if (/unisex/.test(text)) return "unisex";
-  return "unknown";
+function sizeSystem(baseType: string, label = "", fallbackGender = ""): MarketplaceSizeQuote["sizeSystem"] {
+  return inferSizeSystem(baseType, label, fallbackGender);
 }
 function cacheKey(source: QuoteSource, id: string) {
-  return createHash("sha256").update(`size-quotes:v4:${source}:${id}:us`).digest("hex");
+  return createHash("sha256").update(`size-quotes:v5:${source}:${id}:us`).digest("hex");
 }
 async function readCachedData(source: QuoteSource, id: string): Promise<CachedDetail | null> {
   const sql = getDb();
@@ -198,7 +194,7 @@ async function fetchJson(url: URL, apiKey: string) {
   }
   return payload;
 }
-function makeStockxQuotes(payload: unknown, retailer: string, productId: string): MarketplaceSizeQuote[] {
+function makeStockxQuotes(payload: unknown, retailer: string, productId: string, fallbackGender = ""): MarketplaceSizeQuote[] {
   const quotes: MarketplaceSizeQuote[] = [];
   walkObjects(payload, (row) => {
     const variant = obj(row.variant);
@@ -210,7 +206,7 @@ function makeStockxQuotes(payload: unknown, retailer: string, productId: string)
     const lowestAsk = num(row.lowest_ask);
     // An explicit zero ask count takes precedence over a stale lowest_ask value.
     const available = askCount !== undefined ? askCount > 0 : (lowestAsk !== undefined && lowestAsk > 0 ? true : null);
-    const system = sizeSystem(baseType);
+    const system = sizeSystem(baseType, baseSize, fallbackGender);
     const suffix = system === "men" ? " M" : system === "women" ? " W" : system === "youth" ? " Y" : "";
     quotes.push({
       label: `${baseSize}${suffix}`.trim(), available, price: lowestAsk,
@@ -229,8 +225,7 @@ function makeGoatQuotes(payload: unknown, retailer: string, productId: string, p
     if (!rawLabel) return;
     const available = typeof row.available === "boolean" ? row.available : null;
     const lowestAsk = num(row.lowest_ask);
-    const gender = productGender.toLowerCase();
-    const system = /kids|youth|grade|\bgs\b/.test(gender) || /\by\b/i.test(rawLabel) ? "youth" : /women|female/.test(gender) ? "women" : /men|male/.test(gender) ? "men" : /unisex/.test(gender) ? "unisex" : "unknown";
+    const system = sizeSystem(productGender, rawLabel, productGender);
     const suffix = system === "men" ? " M" : system === "women" ? " W" : system === "youth" && !/y$/i.test(rawLabel) ? " Y" : "";
     const label = `${rawLabel}${suffix}`.trim();
     quotes.push({
@@ -246,11 +241,13 @@ function sizeLabel(value: unknown): string {
   const record = obj(value);
   return record ? str(record.size, record.label, record.name, record.value, record.sizeLabel, record.size_label, record.displayName, record.display_name) : "";
 }
-function makeFlightClubDetail(payload: unknown, retailer: string): CachedDetail {
+function makeFlightClubDetail(payload: unknown, retailer: string, fallbackGender = ""): CachedDetail {
   const product = firstProductRecord(payload);
   if (!product) return { quotes: [] };
-  const gender = str(product.sizeCategory, product.singleGender, product.gender);
-  const system = sizeSystem(gender);
+  // Combine all provider audience fields; sizeCategory can be a generic "US"
+  // value while singleGender still carries the important Men/Women/Kids signal.
+  const gender = [product.sizeCategory, product.singleGender, product.gender].map((value) => str(value)).filter(Boolean).join(" ");
+  const system = sizeSystem(gender, "", fallbackGender);
   const quotes: MarketplaceSizeQuote[] = [];
   // Flight Club explicitly separates sellable new sizes from size-picker options.
   // Only the availableSizesNew feeds are treated as available; generic size options are not stock.
@@ -263,11 +260,13 @@ function makeFlightClubDetail(payload: unknown, retailer: string): CachedDetail 
       const record = obj(entry);
       const cents = record ? num(record.specialDisplayPriceCents, record.priceCents, record.price_cents) : undefined;
       const price = cents !== undefined ? cents / 100 : record ? num(record.price, record.amount) : undefined;
-      const suffix = system === "men" ? " M" : system === "women" ? " W" : system === "youth" && !/y$/i.test(label) ? " Y" : "";
+      const labelSystem = sizeSystem(gender, label, fallbackGender);
+      const hasSystemMarker = labelSystem !== "unknown" && sizeSystem("", label, "") !== "unknown";
+      const suffix = labelSystem === "men" && !hasSystemMarker ? " M" : labelSystem === "women" && !hasSystemMarker ? " W" : labelSystem === "youth" && !hasSystemMarker ? " Y" : "";
       quotes.push({
         label: `${label}${suffix}`.trim(), available: true, price, currency: "USD",
         status: "Flight Club lists this as an available new size",
-        sizeSystem: system === "unknown" ? (/\by\b/i.test(label) ? "youth" : "unknown") : system,
+        sizeSystem: labelSystem,
         retailer, source: "flightclub",
       });
     }
@@ -303,7 +302,7 @@ export async function POST(request: NextRequest) {
       catalogProductId,
       gender: (str(listing.gender) && str(listing.gender).toLowerCase() !== "unknown") ? str(listing.gender) : str(item.gender),
     })).filter((listing) => ["stockx", "goat", "flightclub"].includes(listing.source) && listing.providerProductId.length > 0 && listing.providerProductId.length <= 120);
-    return { catalogProductId, listings, needsImage: item.needsImage === true };
+    return { catalogProductId, listings, needsImage: item.needsImage === true, audience: str(item.audience, body?.audience, "all").toLowerCase() };
   }).filter((product) => product.catalogProductId && product.listings.length > 0);
 
   if (!products.length) return NextResponse.json({ error: "The selected catalog product has no StockX, GOAT or Flight Club product reference for size lookup." }, { status: 400 });
@@ -343,7 +342,7 @@ export async function POST(request: NextRequest) {
           const payload = await fetchJson(url, apiKey);
           for (const listing of uncached) {
             const quotes = source === "stockx"
-              ? makeStockxQuotes(payload, listing.retailer, listing.providerProductId)
+              ? makeStockxQuotes(payload, listing.retailer, listing.providerProductId, listing.gender)
               : makeGoatQuotes(payload, listing.retailer, listing.providerProductId, listing.gender);
             const detail = { quotes };
             quoteMap.set(`${source}:${listing.providerProductId}`, detail);
@@ -380,7 +379,7 @@ export async function POST(request: NextRequest) {
       url.searchParams.set("countryCode", "US");
       url.searchParams.set("currencyCode", "USD");
       const payload = await fetchJson(url, apiKey);
-      const detail = makeFlightClubDetail(payload, listing.retailer);
+      const detail = makeFlightClubDetail(payload, listing.retailer, listing.gender);
       quoteMap.set(`flightclub:${listing.providerProductId}`, detail);
       try { await writeCachedData("flightclub", listing.providerProductId, detail); } catch { /* keep live results */ }
       sources.push({ name, status: "success", message: `Loaded ${detail.quotes.length} explicitly available new size option(s).` });
@@ -438,7 +437,7 @@ export async function POST(request: NextRequest) {
     const image = imageMap.get(product.catalogProductId);
     return {
       catalogProductId: product.catalogProductId,
-      quotes: dedupeQuotes(details.flatMap((detail) => detail.quotes)),
+      quotes: filterSizeQuotesForAudience(dedupeQuotes(details.flatMap((detail) => detail.quotes)), product.audience),
       imageUrl: image?.imageUrl ?? details.find((detail) => detail.imageUrl)?.imageUrl,
       colors: image?.colors ?? details.flatMap((detail) => detail.colors ?? []),
       gender: image?.gender ?? details.find((detail) => detail.gender)?.gender,

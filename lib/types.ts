@@ -45,6 +45,7 @@ export type MarketplaceOffer = {
   imageUrl?: string;
   styleCode?: string;
   brand?: string;
+  gender?: ProductGender | string;
   color?: string;
   price?: number;
   priceLabel?: string;

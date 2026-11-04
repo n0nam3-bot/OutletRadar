@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { filterOfferSizeLabels, inferListingAudience, isOfferAllowedForAudience } from "@/lib/audience";
 import type { CatalogBrowseProduct, CatalogListing, MarketplaceOffer, MarketplaceProvider, MarketplaceSourceStatus } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -26,6 +27,7 @@ type ExactTarget = {
   color?: string;
   colors?: string[];
   gender?: string;
+  requestedAudience: string;
   releaseYear?: number;
   listings: CatalogListing[];
 };
@@ -159,6 +161,15 @@ function styleCode(item: Record<string, unknown>): string {
   // product_id is a provider's own identifier, not a cross-retailer SKU.
   return str(item.sku, item.style_code, item.styleCode, item.product_code, item.productCode);
 }
+function sizeLabels(item: Record<string, unknown>): string[] {
+  const raw = item.sizes ?? item.available_sizes ?? item.availableSizes ?? item.size_options ?? item.sizeOptions;
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 100).map((entry) => {
+    if (typeof entry === "string" || typeof entry === "number") return String(entry).trim();
+    const record = obj(entry);
+    return record ? str(record.label, record.name, record.size, record.value, record.display_name) : "";
+  }).filter(Boolean);
+}
 function colorKey(value: string): string {
   const aliases: Record<string, string[]> = {
     black: ["black", "triple black", "blackout"], white: ["white", "off white", "off-white", "sail", "ivory", "cream"],
@@ -226,11 +237,14 @@ function normalizePckt(source: PcktSource, item: Record<string, unknown>, target
   const url = productUrl(source, item);
   if (!title || !url) return null;
   const price = num(item.lowest_ask, item.lowestAsk, item.price, item.specialDisplayPriceCents ? Number(item.specialDisplayPriceCents) / 100 : undefined, item.extracted_price);
+  const sizes = sizeLabels(item);
+  const listingGender = inferListingAudience(str(item.gender, item.gender_name, item.audience, item.size_category, item.sizeCategory), title, sizes);
   const offer: MarketplaceOffer = {
     id: `${source}:${str(item.id, item.product_id, item.productId, item.slug, url)}`,
     source, retailer: source === "stockx" ? "StockX" : source === "goat" ? "GOAT" : source === "flightclub" ? "Flight Club" : "Kicks Crew",
     channel: "online", title, url, imageUrl: imageUrlFromItem(item), styleCode: styleCode(item) || undefined,
-    brand: brand || undefined, price, currency: str(item.currency, "USD").toUpperCase(),
+    brand: brand || undefined, gender: listingGender === "unknown" ? undefined : listingGender, sizes: sizes.length ? sizes : undefined,
+    price, currency: str(item.currency, "USD").toUpperCase(),
     priceLabel: price ? (source === "stockx" || source === "goat" ? "Lowest ask" : "Displayed price") : undefined,
     availability: "unknown", availabilityLabel: "Exact product listing found · verify size and checkout status with seller",
     releaseYear: releaseYear(item, title),
@@ -242,10 +256,13 @@ function normalizeShopping(item: Record<string, unknown>, target: ExactTarget): 
   const retailer = str(item.source, item.seller, item.merchant, item.store);
   const url = httpUrl(str(item.product_link, item.link, item.url));
   if (!title || !retailer || !url) return null;
+  const sizes = sizeLabels(item);
+  const listingGender = inferListingAudience(str(item.gender, item.gender_name, item.audience, item.size_category, item.sizeCategory), title, sizes);
   const offer: MarketplaceOffer = {
     id: `shopping:${str(item.product_id, item.position, title)}:${retailer}`, source: "shopping", retailer,
     channel: "online", title, url, imageUrl: imageUrlFromItem(item), styleCode: styleCode(item) || undefined,
-    brand: str(item.brand, item.manufacturer) || undefined, price: num(item.extracted_price, item.price),
+    brand: str(item.brand, item.manufacturer) || undefined, gender: listingGender === "unknown" ? undefined : listingGender,
+    sizes: sizes.length ? sizes : undefined, price: num(item.extracted_price, item.price),
     currency: str(item.currency, "USD").toUpperCase(), priceLabel: "Displayed price", availability: "unknown",
     availabilityLabel: "Retailer listing found · selected-size stock is not confirmed", releaseYear: releaseYear(item, title),
   };
@@ -257,12 +274,14 @@ function seedListingOffer(listing: CatalogListing, target: ExactTarget, index: n
   return {
     id: `catalog:${listing.source}:${createHash("sha1").update(url).digest("hex").slice(0, 12)}:${index}`,
     source: listing.source, retailer: listing.retailer, channel: "online", title: listing.title || target.title, url,
-    imageUrl: listing.imageUrl, styleCode: target.styleCode, brand: target.brand, color: listing.color,
+    imageUrl: listing.imageUrl, styleCode: target.styleCode, brand: target.brand,
+    gender: inferListingAudience(listing.gender, listing.title || target.title, listing.sizes) === "unknown" ? undefined : inferListingAudience(listing.gender, listing.title || target.title, listing.sizes),
+    color: listing.color, sizes: listing.sizes,
     price: listing.price,
     priceLabel: listing.source === "stockx" || listing.source === "goat" ? "Catalog marketplace price" : "Listed price",
     currency: listing.currency || "USD", availability: "unknown",
     availabilityLabel: "This listing was grouped with the selected catalog model; confirm the selected variant and size on the seller page.",
-    sizes: listing.sizes, releaseYear: listing.releaseYear,
+    releaseYear: listing.releaseYear,
   };
 }
 async function fetchJson(url: URL, headers?: HeadersInit) {
@@ -315,7 +334,8 @@ async function writeCache(key: string, query: string, offers: MarketplaceOffer[]
   `;
 }
 function buildExactQuery(target: ExactTarget): string {
-  return [target.brand, target.title, target.styleCode, target.color, target.releaseYear].filter(Boolean).join(" ").slice(0, 150);
+  const audience = target.requestedAudience === "men" ? "Mens" : target.requestedAudience === "women" ? "Womens" : target.requestedAudience === "kids" ? "Kids" : target.requestedAudience === "unisex" ? "Unisex" : "";
+  return [target.brand, target.title, target.styleCode, target.color, target.releaseYear, audience].filter(Boolean).join(" ").slice(0, 150);
 }
 
 export async function POST(request: NextRequest) {
@@ -331,6 +351,9 @@ export async function POST(request: NextRequest) {
     color: str(raw.color) || undefined,
     colors: Array.isArray(raw.colors) ? raw.colors.filter((value): value is string => typeof value === "string").slice(0, 10) : [],
     gender: str(raw.gender) || undefined,
+    requestedAudience: ["men", "women", "kids", "unisex"].includes(str(body?.audience, raw.requestedAudience, "all").toLowerCase())
+      ? str(body?.audience, raw.requestedAudience, "all").toLowerCase()
+      : "all",
     releaseYear: Number.isInteger(Number(raw.releaseYear)) && Number(raw.releaseYear) >= 1980 && Number(raw.releaseYear) <= 2035 ? Number(raw.releaseYear) : undefined,
     listings: Array.isArray(raw.listings) ? raw.listings.slice(0, 20).map(obj).filter((value): value is Record<string, unknown> => !!value).map((item) => ({
       source: str(item.source) as OfferSource,
@@ -347,7 +370,7 @@ export async function POST(request: NextRequest) {
   };
   const query = buildExactQuery(target);
   const listingSignature = target.listings.map((listing) => `${listing.source}:${listing.url.toLowerCase()}`).sort().join("|");
-  const cacheIdentity = ["exact-offers:v5", target.brand, target.title, target.styleCode || "", target.color || "", target.releaseYear || "", target.gender || "", listingSignature].map(String).join(":");
+  const cacheIdentity = ["exact-offers:v7", target.brand, target.title, target.styleCode || "", target.color || "", target.releaseYear || "", target.gender || "", target.requestedAudience, listingSignature].map(String).join(":");
   const cacheKey = createHash("sha256").update(norm(cacheIdentity)).digest("hex");
   try {
     const cached = await readCache(cacheKey);
@@ -399,12 +422,28 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // Apply the audience selected by the shopper to each retailer listing, not
+  // merely to the grouped catalog card. GS/PS/youth variants are excluded from
+  // adult comparisons even when a marketplace grouped them under one silhouette.
+  const audienceFilteredOffers = offers
+    .filter((offer) => isOfferAllowedForAudience(
+      target.requestedAudience,
+      offer.gender,
+      offer.title,
+      offer.sizes ?? [],
+    ))
+    .map((offer) => ({
+      ...offer,
+      // Do not let the UI fall back to child-size labels after adult size
+      // quotes have been filtered out. Unknown numeric sizing stays unverified.
+      sizes: filterOfferSizeLabels(offer.sizes, target.requestedAudience, offer.gender),
+    }));
   const unique = new Map<string, MarketplaceOffer>();
-  for (const offer of offers) {
+  for (const offer of audienceFilteredOffers) {
     const key = `${offer.source}:${offer.url.toLowerCase()}`;
     if (!unique.has(key)) unique.set(key, offer);
   }
   const results = [...unique.values()].sort((a, b) => (a.price ?? Number.MAX_SAFE_INTEGER) - (b.price ?? Number.MAX_SAFE_INTEGER)).slice(0, 40);
   try { await writeCache(cacheKey, query, results, statuses); } catch { /* keep live offers visible if caching fails */ }
-  return NextResponse.json({ productId: target.id, offers: results, sources: statuses, cached: false, cacheHours: CACHE_HOURS, note: "Only direct grouped listings and provider results that pass exact-product matching are included. The seller page remains the final source for variant and checkout confirmation." });
+  return NextResponse.json({ productId: target.id, offers: results, sources: statuses, cached: false, cacheHours: CACHE_HOURS, note: "Only direct grouped listings and provider results that pass exact-product and selected-audience matching are included. The seller page remains the final source for variant and checkout confirmation." });
 }
