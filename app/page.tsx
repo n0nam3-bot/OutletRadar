@@ -13,6 +13,7 @@ type Status = "idle" | "loading" | "success" | "error";
 
 const SUGGESTED_SEARCHES = ["Air Max 90", "Dunk Low", "Vomero 5", "Tech Fleece"];
 const CATALOG_TYPES: Array<{ value: CatalogBrowseCategory; label: string }> = [
+  { value: "all", label: "All products" },
   { value: "sneakers", label: "Sneakers & shoes" },
   { value: "apparel", label: "Apparel" },
   { value: "accessories", label: "Accessories" },
@@ -37,7 +38,9 @@ function money(value?: number, currency = "USD") {
 
 function catalogAudience(product: CatalogBrowseProduct): string {
   const text = `${product.title} ${product.brand}`.toLowerCase();
-  if (/\b(big kids?|grade school|gs|little kids?|preschool|ps|toddler|infant|youth|kids?|boys?|girls?)\b/.test(text)) return "kids";
+  const hasYouthSize = [...(product.sizes ?? []), ...(product.listings ?? []).flatMap((listing) => listing.sizes ?? [])]
+    .some((size) => /\d+(?:\.\d+)?\s*y\b/i.test(size));
+  if (hasYouthSize || /\b(big kids?|grade school|gs|little kids?|preschool|ps|toddler|infant|youth|kids?|boys?|girls?)\b/.test(text)) return "kids";
   const hasMen = /\b(men|mens|male)\b/.test(text);
   const hasWomen = /\b(women|womens|female)\b/.test(text);
   if (hasMen && hasWomen) return "unisex";
@@ -60,11 +63,13 @@ function catalogSizesOf(product: CatalogBrowseProduct, extraQuotes: MarketplaceS
 }
 
 function catalogColorsOf(product: CatalogBrowseProduct): string[] {
-  return [...new Set([
-    product.color ?? "",
-    ...(product.colors ?? []),
-    ...(product.listings ?? []).map((listing) => listing.color ?? ""),
-  ].map((value) => value.trim()).filter(Boolean))];
+  const explicit = [product.color ?? "", ...(product.colors ?? []), ...(product.listings ?? []).map((listing) => listing.color ?? "")];
+  const title = ` ${product.title.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ")} `;
+  const inferred = Object.entries(COLOR_FAMILIES).flatMap(([family, aliases]) => {
+    const terms = [family, ...aliases];
+    return terms.some((term) => title.includes(` ${term.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `)) ? [family] : [];
+  });
+  return [...new Set([...explicit, ...inferred].map((value) => value.trim()).filter(Boolean))];
 }
 
 function catalogSizeMatches(candidate: string, requested: string): boolean {
@@ -80,11 +85,35 @@ function catalogSizeMatches(candidate: string, requested: string): boolean {
   return value.includes(target);
 }
 
+function catalogListedSizeMatches(candidate: string, requested: string, gender: string): boolean {
+  if (!catalogSizeMatches(candidate, requested)) return false;
+  const label = candidate.toLowerCase();
+  const targetNumber = normalizedCatalogSize(requested).match(/\d+(?:\.\d+)?/)?.[0];
+  if (!targetNumber) return true;
+  const allowed = (system: string) => gender === "all" || gender === "unisex" ||
+    (gender === "men" && system === "m") ||
+    (gender === "women" && system === "w") ||
+    (gender === "kids" && system === "y");
+  // Combined labels can use either M 11.5 / W 13 or 11.5 M / 13 W.
+  const prefixed = [...label.matchAll(/\b([mwy])\s*(\d+(?:\.\d+)?)/g)];
+  const suffixed = [...label.matchAll(/(\d+(?:\.\d+)?)\s*([mwy])\b/g)];
+  const typed = [
+    ...prefixed.map((match) => ({ system: match[1], number: match[2] })),
+    ...suffixed.map((match) => ({ system: match[2], number: match[1] })),
+  ];
+  if (typed.length) return typed.some((entry) => entry.number === targetNumber && allowed(entry.system));
+  const youthSuffix = /\b\d+(?:\.\d+)?\s*y\b/i.test(label);
+  if (youthSuffix && (gender === "men" || gender === "women")) return false;
+  if (gender === "men" && /\b(?:women|womens)\b/i.test(label)) return false;
+  if (gender === "women" && /\b(?:men|mens)\b/i.test(label)) return false;
+  return true;
+}
+
 const COLOR_FAMILIES: Record<string, string[]> = {
-  black: ["black", "triple black", "blackout"],
+  black: ["black", "triple black", "blackout", "bred"],
   white: ["white", "off white", "off-white", "sail", "ivory", "cream", "chalk", "summit white"],
   gray: ["gray", "grey", "cement", "wolf grey", "cool grey", "light smoke grey", "dark smoke grey", "anthracite"],
-  red: ["red", "fire red", "university red", "varsity red", "crimson", "scarlet", "cherry", "cardinal", "infrared"],
+  red: ["red", "fire red", "university red", "varsity red", "crimson", "scarlet", "cherry", "cardinal", "infrared", "bred"],
   blue: ["blue", "royal blue", "navy", "midnight navy", "university blue", "unc blue", "obsidian", "cobalt"],
   green: ["green", "pine green", "olive", "mint", "malachite", "jade", "sequoia"],
   brown: ["brown", "mocha", "chocolate", "cacao", "coffee", "baroque brown"],
@@ -112,7 +141,7 @@ function quoteMatchesSize(quote: MarketplaceSizeQuote, requested: string, gender
   return quote.available === true;
 }
 
-type CatalogFilters = { gender: string; size: string; color: string; minPrice: string; maxPrice: string; saleOnly: boolean };
+type CatalogFilters = { gender: string; releaseYear: string; size: string; color: string; minPrice: string; maxPrice: string; saleOnly: boolean };
 type CatalogFilterEvaluation = { keep: boolean; unknown: string[]; matched: number };
 
 function catalogFilterEvaluation(
@@ -129,13 +158,28 @@ function catalogFilterEvaluation(
     else return { keep: false, unknown, matched };
   }
 
+  if (filters.releaseYear.trim()) {
+    const requestedYear = Number(filters.releaseYear);
+    const year = product.releaseYear ?? Number(product.title.match(/\b(?:19|20)\d{2}\b/)?.[0]);
+    if (!year) { unknown.push("release year"); return { keep: false, unknown, matched }; }
+    if (year !== requestedYear) return { keep: false, unknown, matched };
+    matched++;
+  }
+
   if (filters.size.trim()) {
+    const listedLabels = [
+      ...(product.sizes ?? []),
+      ...(product.listings ?? []).flatMap((listing) => listing.sizes ?? []),
+    ];
     const quotes = [...(product.sizeQuotes ?? []), ...extraQuotes];
-    const sizeMatch = quotes.some((quote) => quoteMatchesSize(quote, filters.size, filters.gender));
-    if (sizeMatch) matched++;
+    const quoteMatch = quotes.some((quote) => catalogSizeMatches(quote.label, filters.size) && quote.available !== false &&
+      !(filters.gender === "men" && quote.sizeSystem === "women") &&
+      !(filters.gender === "women" && quote.sizeSystem === "men") &&
+      !(filters.gender === "kids" && quote.sizeSystem !== "youth"));
+    const listedMatch = listedLabels.some((label) => catalogListedSizeMatches(label, filters.size, filters.gender));
+    if (quoteMatch || listedMatch) matched++;
     else {
-      if (!quotes.length) unknown.push("size-level offers");
-      else if (quotes.every((quote) => quote.available === null)) unknown.push("size availability");
+      if (!quotes.length && !listedLabels.length) unknown.push("size list");
       return { keep: false, unknown, matched };
     }
   }
@@ -144,7 +188,7 @@ function catalogFilterEvaluation(
     const candidates = catalogColorsOf(product);
     if (candidates.some((color) => colorMatches(color, filters.color))) matched++;
     else {
-      if (!catalogColorsOf(product).length) unknown.push("colorway");
+      if (!candidates.length) unknown.push("colorway");
       return { keep: false, unknown, matched };
     }
   }
@@ -327,6 +371,7 @@ export default function Home() {
   const [catalogType, setCatalogType] = useState<CatalogBrowseCategory>("sneakers");
   const [catalogBrand, setCatalogBrand] = useState("all");
   const [catalogGender, setCatalogGender] = useState("all");
+  const [catalogReleaseYear, setCatalogReleaseYear] = useState("");
   const [catalogSize, setCatalogSize] = useState("");
   const [catalogColor, setCatalogColor] = useState("");
   const [catalogMinPrice, setCatalogMinPrice] = useState("");
@@ -337,7 +382,6 @@ export default function Home() {
   const [catalogSizeQuotes, setCatalogSizeQuotes] = useState<Record<string, MarketplaceSizeQuote[]>>({});
   const [catalogSizeQuoteSources, setCatalogSizeQuoteSources] = useState<Array<{ name: string; status: string; message: string }>>([]);
   const [activeCompareProduct, setActiveCompareProduct] = useState<CatalogBrowseProduct | null>(null);
-  const [catalogCollapsed, setCatalogCollapsed] = useState(false);
   const [marketplaceSizeQuotes, setMarketplaceSizeQuotes] = useState<MarketplaceSizeQuote[]>([]);
   const [marketplaceSizeStatus, setMarketplaceSizeStatus] = useState<Status>("idle");
   const [marketplaceSizeSources, setMarketplaceSizeSources] = useState<Array<{ name: string; status: string; message: string }>>([]);
@@ -377,22 +421,21 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, []);
 
-  // Once a product comparison is selected, wait until the collapsed catalog and
-  // comparison panel have rendered before scrolling to the expanded panel.
+  // Expand the comparison inside the selected product card, then bring that card into view.
   useEffect(() => {
-    if (!activeCompareProductId || !catalogCollapsed) {
-      if (!activeCompareProductId) lastCompareScrollIdRef.current = null;
+    if (!activeCompareProductId) {
+      lastCompareScrollIdRef.current = null;
       return;
     }
     if (lastCompareScrollIdRef.current === activeCompareProductId) return;
     lastCompareScrollIdRef.current = activeCompareProductId;
     const frame = window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
-        document.getElementById("retailer-comparison")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        document.getElementById(`catalog-offers-${activeCompareProductId}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeCompareProductId, catalogCollapsed]);
+  }, [activeCompareProductId]);
 
   useEffect(() => {
     try {
@@ -493,12 +536,13 @@ export default function Home() {
 
   const catalogFilters = useMemo(() => ({
     gender: catalogGender,
+    releaseYear: catalogReleaseYear,
     size: catalogSize,
     color: catalogColor,
     minPrice: catalogMinPrice,
     maxPrice: catalogMaxPrice,
     saleOnly: catalogSaleOnly,
-  }), [catalogGender, catalogSize, catalogColor, catalogMinPrice, catalogMaxPrice, catalogSaleOnly]);
+  }), [catalogGender, catalogReleaseYear, catalogSize, catalogColor, catalogMinPrice, catalogMaxPrice, catalogSaleOnly]);
 
   const catalogVisibleProducts = useMemo(() => {
     return catalogProducts
@@ -551,9 +595,19 @@ export default function Home() {
   }
 
   async function browseCatalog() {
+    const term = query.trim();
+    if (term.length < 2) {
+      setCatalogError("Enter at least two characters describing the product you are hunting for.");
+      setCatalogStatus("error");
+      return;
+    }
+    if (catalogReleaseYear.trim() && !/^(19|20)\d{2}$/.test(catalogReleaseYear.trim())) {
+      setCatalogError("Enter a complete four-digit release year, or leave the year blank.");
+      setCatalogStatus("error");
+      return;
+    }
     setCatalogStatus("loading");
     setCatalogError("");
-    setCatalogCollapsed(false);
     setActiveCompareProduct(null);
     setMarketplaceOffers([]);
     setMarketplaceSources([]);
@@ -565,8 +619,9 @@ export default function Home() {
     setCatalogSizeQuotes({});
     setCatalogSizeQuoteSources([]);
     try {
-      const params = new URLSearchParams({ category: catalogType, brand: catalogBrand });
+      const params = new URLSearchParams({ category: catalogType, brand: catalogBrand, gender: catalogGender });
       if (query.trim()) params.set("q", query.trim());
+      if (catalogReleaseYear.trim()) params.set("releaseYear", catalogReleaseYear.trim());
       const response = await fetch(`/api/catalog?${params.toString()}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Catalog browse failed.");
@@ -604,27 +659,6 @@ export default function Home() {
       setCatalogError(caught instanceof Error ? caught.message : "Catalog browse failed.");
       setCatalogStatus("error");
       setCatalogProducts([]);
-    }
-  }
-
-  async function compareRetailers(searchTerm = query) {
-    const term = searchTerm.trim();
-    if (term.length < 2) { setMarketplaceError("Enter a product or model name first."); return; }
-    setQuery(term);
-    setSelectedProductUrl("");
-    setMarketplaceStatus("loading");
-    setMarketplaceError("");
-    try {
-      const response = await fetch(`/api/marketplaces?q=${encodeURIComponent(term)}`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? "Retailer comparison failed.");
-      setMarketplaceOffers(Array.isArray(data.offers) ? data.offers : []);
-      setMarketplaceSources(Array.isArray(data.sources) ? data.sources : []);
-      setMarketplaceCachedAt(data.cachedAt ? String(data.cachedAt) : null);
-      setMarketplaceStatus("success");
-    } catch (caught) {
-      setMarketplaceError(caught instanceof Error ? caught.message : "Retailer comparison failed.");
-      setMarketplaceStatus("error");
     }
   }
 
@@ -669,15 +703,46 @@ export default function Home() {
     }
   }
 
-  function compareCatalogProduct(product: CatalogBrowseProduct) {
-    const meaningfulBrand = product.brand && product.brand.toLowerCase() !== "various brands";
-    const productQuery = meaningfulBrand && !product.title.toLowerCase().includes(product.brand.toLowerCase())
-      ? `${product.brand} ${product.title}`
-      : product.title;
+  async function compareCatalogProduct(product: CatalogBrowseProduct) {
+    if (activeCompareProduct?.id === product.id) {
+      setActiveCompareProduct(null);
+      setMarketplaceStatus("idle");
+      setMarketplaceOffers([]);
+      setMarketplaceSources([]);
+      setMarketplaceSizeQuotes([]);
+      setMarketplaceSizeStatus("idle");
+      return;
+    }
     setActiveCompareProduct(product);
-    setCatalogCollapsed(true);
-    void compareRetailers(productQuery);
-    void loadCatalogProductSizes(product);
+    setMarketplaceOffers([]);
+    setMarketplaceSources([]);
+    setMarketplaceStatus("loading");
+    setMarketplaceError("");
+    setMarketplaceCachedAt(null);
+    setMarketplaceSizeQuotes([]);
+    setMarketplaceSizeStatus("loading");
+    setMarketplaceSizeSources([]);
+
+    const comparisonRequest = fetch("/api/catalog/offers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ product }),
+    }).then(async (response) => {
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Could not compare this exact product.");
+      setMarketplaceOffers(Array.isArray(data.offers) ? data.offers as MarketplaceOffer[] : []);
+      setMarketplaceSources(Array.isArray(data.sources) ? data.sources as MarketplaceSourceStatus[] : []);
+      setMarketplaceCachedAt(data.cachedAt ? String(data.cachedAt) : null);
+      setMarketplaceStatus("success");
+    }).catch((caught) => {
+      setMarketplaceError(caught instanceof Error ? caught.message : "Could not compare this exact product.");
+      setMarketplaceStatus("error");
+    });
+
+    // Size feeds are separate from catalog search and only run after the shopper
+    // opens the comparison for this specific grouped product.
+    await loadCatalogProductSizes(product);
+    await comparisonRequest;
   }
 
   function chooseSuggestion(product: NikeProduct) {
@@ -814,96 +879,108 @@ export default function Home() {
         </a>
         <nav className="topnav" aria-label="Main navigation">
           <a href="#catalog">Catalog</a>
-          <a className="nav-compare-link" href="#retailer-comparison">Compare</a>
+          <a className="nav-compare-link" href={activeCompareProduct ? `#catalog-offers-${activeCompareProduct.id}` : "#catalog"}>Compare</a>
           <a href="#watchlist" onClick={() => setTab("saved")}>Watchlist <span className="nav-count">{saved.length}</span></a>
         </nav>
         <div className="topbar-right"><span className="live-dot" /> MULTI-RETAILER SEARCH</div>
       </header>
 
-      {!activeCompareProduct && <section className="hero hero-hunt" id="top">
+      <section className="hero hero-hunt" id="top">
         <div className="hero-noise" />
         <div className="hero-hunt-inner">
           <div className="hero-hunt-copy">
             <div className="eyebrow"><span className="eyebrow-line" /> THE HUNT STARTS HERE</div>
             <h1>What are you<br /><em>hunting for?</em></h1>
-            <p className="hero-copy">Search any brand, model or style across retailers and resale marketplaces.</p>
+            <p className="hero-copy">Find the exact model, then compare its listings across retailers and marketplaces.</p>
           </div>
           <div className="hunt-panel">
             <form className="hunt-search-form" onSubmit={(event) => { event.preventDefault(); void browseCatalog(); }}>
-              <div className="search-input-wrap"><Search size={20} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Try Jordan 4, New Balance 9060, Samba OG…" aria-label="What are you hunting for?" autoComplete="off" /><button type="button" className="clear-query" onClick={() => setQuery("")} aria-label="Clear search">{query ? <X size={17} /> : null}</button></div>
+              <div className="search-input-wrap"><Search size={20} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Try Jordan 4 Retro Bred, New Balance 9060, Samba OG…" aria-label="What are you hunting for?" autoComplete="off" minLength={2} required /><button type="button" className="clear-query" onClick={() => setQuery("")} aria-label="Clear search">{query ? <X size={17} /> : null}</button></div>
               <button className="search-button" type="submit" disabled={catalogStatus === "loading"}>{catalogStatus === "loading" ? <span className="spinner" /> : <Search size={17} />}<span>{catalogStatus === "loading" ? "Searching" : "Find it"}</span><ArrowRight size={17} /></button>
             </form>
-            <div className="hunt-primary-filters">
-              <label className="catalog-select-field"><span>ITEM TYPE</span><select value={catalogType} onChange={(event) => { setCatalogType(event.target.value as CatalogBrowseCategory); setCatalogStatus("idle"); setCatalogProducts([]); setCatalogSources([]); setCatalogCachedAt(null); }}>{CATALOG_TYPES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-              <label className="catalog-select-field"><span>BRAND</span><select value={catalogBrand} onChange={(event) => { setCatalogBrand(event.target.value); setCatalogStatus("idle"); setCatalogProducts([]); setCatalogSources([]); setCatalogCachedAt(null); }}>{CATALOG_BRANDS.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label>
-              <button type="button" className={`refine-toggle ${catalogFiltersOpen ? "refine-toggle-active" : ""}`} onClick={() => setCatalogFiltersOpen((value) => !value)}><SlidersHorizontal size={14} /> Filters {catalogFiltersOpen ? <X size={13} /> : <span className="refine-count">{[catalogGender !== "all", Boolean(catalogSize), Boolean(catalogColor), Boolean(catalogMinPrice || catalogMaxPrice), catalogSaleOnly].filter(Boolean).length || ""}</span>}</button>
+            <div className="hunt-primary-filters hunt-primary-filters-v2">
+              <label className="catalog-select-field"><span>ITEM TYPE</span><select value={catalogType} onChange={(event) => { setCatalogType(event.target.value as CatalogBrowseCategory); setCatalogStatus("idle"); setCatalogProducts([]); setCatalogSources([]); setCatalogCachedAt(null); }}>
+                {CATALOG_TYPES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+              </select></label>
+              <label className="catalog-select-field"><span>BRAND</span><select value={catalogBrand} onChange={(event) => { setCatalogBrand(event.target.value); setCatalogStatus("idle"); setCatalogProducts([]); setCatalogSources([]); setCatalogCachedAt(null); }}>
+                {CATALOG_BRANDS.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
+              </select></label>
+              <label className="catalog-select-field"><span>GENDER</span><select value={catalogGender} onChange={(event) => setCatalogGender(event.target.value)}>
+                {GENDERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+              </select></label>
+              <label className="catalog-select-field"><span>RELEASE YEAR</span><input className="catalog-year-input" inputMode="numeric" maxLength={4} value={catalogReleaseYear} onChange={(event) => setCatalogReleaseYear(event.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="Any year" /></label>
+              <button type="button" className={`refine-toggle ${catalogFiltersOpen ? "refine-toggle-active" : ""}`} onClick={() => setCatalogFiltersOpen((value) => !value)}><SlidersHorizontal size={14} /> Filters {catalogFiltersOpen ? <X size={13} /> : <span className="refine-count">{[Boolean(catalogSize), Boolean(catalogColor), Boolean(catalogMinPrice || catalogMaxPrice), catalogSaleOnly].filter(Boolean).length || ""}</span>}</button>
             </div>
             {catalogFiltersOpen && <div className="hunt-advanced-filters">
-              <label className="search-filter-field"><span>GENDER</span><select value={catalogGender} onChange={(event) => setCatalogGender(event.target.value)}>{GENDERS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
               <label className="search-filter-field"><span>SIZE</span><input value={catalogSize} onChange={(event) => setCatalogSize(event.target.value)} placeholder="e.g. 11.5 or 5Y" /></label>
               <label className="search-filter-field"><span>COLOR</span><input value={catalogColor} onChange={(event) => setCatalogColor(event.target.value)} placeholder="e.g. black, red" /></label>
               <label className="search-filter-field"><span>MIN PRICE ($)</span><input type="number" min="0" inputMode="decimal" value={catalogMinPrice} onChange={(event) => setCatalogMinPrice(event.target.value)} placeholder="No min" /></label>
               <label className="search-filter-field"><span>MAX PRICE ($)</span><input type="number" min="0" inputMode="decimal" value={catalogMaxPrice} onChange={(event) => setCatalogMaxPrice(event.target.value)} placeholder="No max" /></label>
               <button type="button" className={`sale-toggle search-sale-toggle ${catalogSaleOnly ? "sale-toggle-active" : ""}`} onClick={() => setCatalogSaleOnly((value) => !value)}><Tag size={15} /> Sale only <span className="toggle-switch"><span /></span></button>
-              <button type="button" className="clear-refinements" onClick={() => { setCatalogGender("all"); setCatalogSize(""); setCatalogColor(""); setCatalogMinPrice(""); setCatalogMaxPrice(""); setCatalogSaleOnly(false); }}>Clear filters</button>
+              <button type="button" className="clear-refinements" onClick={() => { setCatalogSize(""); setCatalogColor(""); setCatalogMinPrice(""); setCatalogMaxPrice(""); setCatalogSaleOnly(false); }}>Clear refinements</button>
+              <button type="button" className="apply-refinements" disabled={catalogStatus === "loading"} onClick={() => void browseCatalog()}>{catalogStatus === "loading" ? "Applying…" : "Apply refinements"}</button>
             </div>}
-            <p className="hunt-note">Size and color filters use source attributes and confirmed marketplace size feeds. Unknown data is not treated as a positive match.</p>
+            <p className="hunt-note">Choose an item type, optional brand, audience and release year, then describe the model. Size, color, price and sale refine the results without starting a new provider search.</p>
           </div>
         </div>
-      </section>}
+      </section>
 
-      {!activeCompareProduct ? <section className="catalog-explorer catalog-results-section" id="catalog" aria-label="Product catalog">
+      <section className="catalog-explorer catalog-results-section" id="catalog" aria-label="Product catalog">
         <div className="catalog-results-heading">
           <div><div className="eyebrow dark-eyebrow">PRODUCT CATALOG</div><h2>{query.trim() ? `Matches for “${query.trim()}”` : "Explore products across brands."}</h2></div>
           <span className="catalog-result-count">{catalogStatus === "success" ? `${catalogVisibleProducts.length} of ${catalogProducts.length} matches` : "Marketplace catalog discovery"}</span>
         </div>
-        {!catalogCollapsed && catalogError && <div className="store-error">{catalogError}</div>}
-        {!catalogCollapsed && catalogStatus === "loading" && <div className="store-results-loading">Searching product catalogs across connected marketplaces…</div>}
-        {!catalogCollapsed && catalogStatus === "idle" && <div className="catalog-explorer-empty"><strong>Start with a model, brand or product type.</strong><span>Browse known models from marketplace catalogs, including older releases that the original brand may no longer sell.</span></div>}
-        {catalogStatus === "success" && !catalogCollapsed && <div className="catalog-browser-results">
-          <div className="catalog-browser-meta"><strong>{catalogVisibleProducts.length} matching product{catalogVisibleProducts.length === 1 ? "" : "s"}</strong><span>{catalogCachedAt ? `Cached ${new Date(catalogCachedAt).toLocaleString()}` : "Fresh discovery"} · Product data may be cached upstream</span></div>
-          {catalogUnverifiedFilterCount > 0 && <div className="catalog-filter-summary">{catalogUnverifiedFilterCount} product{catalogUnverifiedFilterCount === 1 ? " was" : "s were"} hidden because the selected size, color or other filter could not be verified from provider data. Clear a filter to see the broader catalog.</div>}
+        {catalogError && <div className="store-error">{catalogError}</div>}
+        {catalogStatus === "loading" && <div className="store-results-loading">Searching product catalogs across connected marketplaces…</div>}
+        {catalogStatus === "idle" && <div className="catalog-explorer-empty"><strong>Start with an item type and model.</strong><span>Browse known models from connected catalogs, including older releases that the original brand may no longer sell.</span></div>}
+        {catalogStatus === "success" && <div className="catalog-browser-results">
+          <div className="catalog-browser-meta"><strong>{catalogVisibleProducts.length} matching product{catalogVisibleProducts.length === 1 ? "" : "s"}</strong><span>{catalogCachedAt ? `Cached ${new Date(catalogCachedAt).toLocaleString()}` : "Fresh discovery"} · Offers are grouped by product model</span></div>
+          {catalogUnverifiedFilterCount > 0 && <div className="catalog-filter-summary">{catalogUnverifiedFilterCount} products were excluded because provider data did not confirm the selected refinements. Clear a filter to broaden results.</div>}
           {catalogSizeQuoteSources.length > 0 && <div className="catalog-size-source-note">Size data: {catalogSizeQuoteSources.map((source) => `${source.name} — ${source.message}`).join(" · ")}</div>}
           {catalogSources.length > 0 && <details className="catalog-sources-details"><summary>Sources checked ({catalogSources.filter((source) => source.status === "success").length} successful)</summary><div className="retailer-source-grid">{catalogSources.map((source) => <div className="retailer-source-status" key={`${source.key ?? source.name}-${source.status}`}><strong>{source.name} · {source.status === "success" ? `${source.results} found` : source.status.replaceAll("_", " ")}</strong><span>{source.message}</span></div>)}</div></details>}
           {catalogVisibleProducts.length > 0 ? <div className="catalog-product-grid">{catalogVisibleProducts.map((product) => {
             const savedProduct = toWatchlistProduct(product);
             const isSaved = savedProduct ? savedUrls.has(savedProduct.url) : false;
             const sale = product.onSale === true || (product.price !== undefined && product.originalPrice !== undefined && product.originalPrice > product.price);
-            return <article className="catalog-product-card" key={product.id}>
+            const expanded = activeCompareProduct?.id === product.id;
+            return <article className={`catalog-product-card ${expanded ? "catalog-product-card-expanded" : ""}`} key={product.id}>
               <ProductImageFrame className="catalog-product-image" alt={product.title} sources={[product.imageUrl, ...(product.listings ?? []).map((listing) => listing.imageUrl)]} badge={sale ? "SALE" : undefined} />
               <div className="catalog-product-body"><div className="catalog-product-brand">{product.brand} <span>{product.category.toUpperCase()}</span></div><h3>{product.title}</h3>
-                <div className="catalog-product-facts">{product.gender && product.gender !== "Unknown" ? product.gender : "Audience not listed"}{catalogColorsOf(product).length ? ` · ${catalogColorsOf(product).slice(0, 2).join(", ")}` : ""}</div>
+                <div className="catalog-product-facts">{product.gender && product.gender !== "Unknown" ? product.gender : "Audience not listed"}{product.releaseYear ? ` · ${product.releaseYear}` : ""}{catalogColorsOf(product).length ? ` · ${catalogColorsOf(product).slice(0, 2).join(", ")}` : ""}</div>
                 {catalogSizeQuotes[product.id]?.some((quote) => quote.available === true) && <div className="catalog-verified-sizes">Size signals: {catalogSizeQuotes[product.id].filter((quote) => quote.available === true).slice(0, 5).map((quote) => `${quote.label} (${quote.source === "stockx" ? "StockX ask" : quote.retailer})`).join(" · ")}</div>}
                 {product.price !== undefined && <div className="catalog-price-row"><strong>{money(product.price, product.currency || "USD")}</strong>{product.originalPrice && product.originalPrice > product.price && <del>{money(product.originalPrice, product.currency || "USD")}</del>}</div>}
-                {product.styleCode && <small>Style / SKU: {product.styleCode}</small>}<div className="catalog-product-sources">Found on {product.sources.join(" · ")}</div>
-                <div className="catalog-card-actions"><button type="button" onClick={() => compareCatalogProduct(product)}>Compare offers <ArrowRight size={13} /></button>{savedProduct && <button type="button" className={`catalog-save-button ${isSaved ? "catalog-save-active" : ""}`} onClick={() => void toggleSaved(savedProduct)} aria-label={isSaved ? "Remove from watchlist" : "Save to watchlist"}><Heart size={15} fill={isSaved ? "currentColor" : "none"} /></button>}</div>
+                {product.styleCode && <small>Style / SKU: {product.styleCode}</small>}<div className="catalog-product-sources">{product.listings.length} retailer listing{product.listings.length === 1 ? "" : "s"} · {product.sources.join(" · ")}</div>
+                <div className="catalog-card-actions"><button type="button" aria-expanded={expanded} aria-controls={`catalog-offers-${product.id}`} onClick={() => void compareCatalogProduct(product)}>{expanded ? "Hide offers" : "Compare offers"} <ArrowRight size={13} /></button>{savedProduct && <button type="button" className={`catalog-save-button ${isSaved ? "catalog-save-active" : ""}`} onClick={() => void toggleSaved(savedProduct)} aria-label={isSaved ? "Remove from watchlist" : "Save to watchlist"}><Heart size={15} fill={isSaved ? "currentColor" : "none"} /></button>}</div>
               </div>
+              {expanded && <div className="catalog-inline-comparison" id={`catalog-offers-${product.id}`}>
+                <div className="catalog-inline-head"><div><span className="eyebrow dark-eyebrow">EXACT PRODUCT OFFERS</span><strong>{product.title}</strong><small>{product.brand}{product.styleCode ? ` · Style ${product.styleCode}` : ""}{product.releaseYear ? ` · ${product.releaseYear}` : ""}</small></div><button type="button" onClick={() => { setActiveCompareProduct(null); setMarketplaceOffers([]); setMarketplaceStatus("idle"); setMarketplaceSizeQuotes([]); setMarketplaceSizeStatus("idle"); }}>Close</button></div>
+                {marketplaceError && <div className="store-error">{marketplaceError}</div>}
+                {marketplaceSizeStatus === "error" && marketplaceSizeSources.map((source) => <div className="catalog-filter-summary" key={source.name}>{source.name}: {source.message}</div>)}
+                {(marketplaceStatus === "loading" || marketplaceSizeStatus === "loading") && <div className="store-results-loading">Checking this product's grouped retailer listings and size feeds…</div>}
+                {marketplaceStatus === "success" && <>
+                  <div className="catalog-inline-meta"><strong>{marketplaceOffers.length} matching retailer offer{marketplaceOffers.length === 1 ? "" : "s"}</strong><span>{marketplaceCachedAt ? `Cached ${new Date(marketplaceCachedAt).toLocaleString()}` : "Fresh comparison"}</span></div>
+                  {marketplaceOffers.length > 0 ? <div className="catalog-inline-offers">{marketplaceOffers.map((offer) => {
+                    const quotes = marketplaceSizeQuotes.filter((quote) => quote.source === offer.source);
+                    const quoteLabels = [...new Set(quotes.map((quote) => quote.label))];
+                    const listedSizes = offer.sizes ?? [];
+                    return <article className="catalog-inline-offer" key={offer.id}>
+                      <div className="catalog-inline-offer-top"><strong>{offer.retailer}</strong><span>ONLINE LISTING</span></div>
+                      <h4>{offer.title}</h4>
+                      {offer.price !== undefined && <div className="catalog-inline-price">{money(offer.price, offer.currency)} <small>{offer.priceLabel ?? "Displayed price"}</small></div>}
+                      {quoteLabels.length > 0 ? <div className="catalog-inline-sizes"><b>Marketplace size signals</b><div>{quotes.slice(0, 18).map((quote, index) => <span className={quote.available === true ? "is-available" : quote.available === false ? "is-unavailable" : "is-unknown"} key={`${quote.label}-${index}`}>{quote.label} · {quote.available === true ? "signal" : quote.available === false ? "no ask" : "unverified"}{quote.price !== undefined ? ` · ${money(quote.price, quote.currency)}` : ""}</span>)}</div></div> : listedSizes.length > 0 ? <div className="catalog-inline-sizes"><b>Sizes listed by seller (stock not confirmed)</b><div>{listedSizes.slice(0, 18).map((size) => <span className="is-unknown" key={size}>{size}</span>)}</div></div> : <p className="catalog-inline-no-sizes">This source did not provide size-level data.</p>}
+                      <p className="catalog-inline-stock">{offer.availabilityLabel}</p>
+                      <a className="catalog-inline-link" href={offer.url} target="_blank" rel="noreferrer">Open this exact listing <ExternalLink size={12} /></a>
+                    </article>;
+                  })}</div> : <div className="retailer-no-results"><strong>No exact retailer listings passed the product match.</strong><span>We do not show similar models as offers. The product remains in the catalog; check back later or use the original catalog listings if a seller changes its title.</span></div>}
+                  {marketplaceSources.length > 0 && <details className="catalog-sources-details"><summary>Retailers checked</summary><div className="retailer-source-grid">{marketplaceSources.map((source) => <div className="retailer-source-status" key={`${source.key ?? source.name}-${source.status}`}><strong>{source.name} · {source.status === "success" ? `${source.results} found` : source.status.replaceAll("_", " ")}</strong><span>{source.message}</span></div>)}</div></details>}
+                  <p className="store-stock-disclaimer">A retailer listing is not a guarantee that every size is in stock. Check the seller's selected size and checkout page before purchasing.</p>
+                </>}
+              </div>}
             </article>;
-          })}</div> : <div className="catalog-explorer-empty"><strong>No confirmed matches for those refinements.</strong><span>Some catalog records do not include color or size details. Clear one filter to see more models, then open Compare offers to check the available size feeds.</span></div>}
-          <p className="catalog-disclaimer">Catalog results identify product models and listings indexed by connected sources. Prices may not be available for every model. A listed size is not confirmation of stock; check the seller's live product page before purchasing.</p>
+          })}</div> : <div className="catalog-explorer-empty"><strong>No products match those filters.</strong><span>Try clearing size, color, price or sale refinements. A product is excluded when its available catalog data does not confirm the selected attribute.</span></div>}
+          <p className="catalog-disclaimer">Each card represents a product model. Compare offers opens only listings that pass the selected model's match checks, with direct links to the seller's product page.</p>
         </div>}
-      </section> : <div className="compare-return-bar" id="catalog"><span><strong>Comparing now:</strong> {activeCompareProduct.title}</span><button type="button" onClick={() => { setCatalogCollapsed(false); setActiveCompareProduct(null); window.requestAnimationFrame(() => document.getElementById("top")?.scrollIntoView({ behavior: "smooth", block: "start" })); }}>Back to search results</button></div>}
-
-      {activeCompareProduct && <section className="retailer-compare retailer-compare-standalone" id="retailer-comparison" aria-label="Compare retailer offers">
-        <div className="retailer-compare-head"><div><div className="eyebrow dark-eyebrow">MULTI-RETAILER COMPARISON</div><h3>{activeCompareProduct.title}</h3><p>{activeCompareProduct.brand} · {activeCompareProduct.styleCode ? `Style ${activeCompareProduct.styleCode} · ` : ""}Offers from marketplaces and retailers.</p></div><button type="button" className="back-to-catalog-button" onClick={() => { setCatalogCollapsed(false); setActiveCompareProduct(null); window.setTimeout(() => document.getElementById("catalog")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50); }}>Back to results</button></div>
-        <div className="selected-compare-product"><ProductImageFrame className="selected-compare-image" alt={activeCompareProduct.title} sources={[activeCompareProduct.imageUrl, ...(activeCompareProduct.listings ?? []).map((listing) => listing.imageUrl)]} /><div><strong>{activeCompareProduct.title}</strong><span>{activeCompareProduct.brand}{activeCompareProduct.styleCode ? ` · ${activeCompareProduct.styleCode}` : ""}</span></div></div>
-        <div className="size-quote-panel"><div className="size-quote-heading"><strong>SIZE AVAILABILITY BY MARKETPLACE</strong><span>StockX active asks · GOAT size availability · Flight Club listed new sizes. Provider data may be delayed and is not checkout confirmation.</span></div>
-          {marketplaceSizeStatus === "loading" && <div className="retailer-idle-hint">Checking size-level offers from StockX, GOAT and Flight Club…</div>}
-          {marketplaceSizeStatus === "error" && marketplaceSizeSources.map((source) => <div className="catalog-filter-summary" key={source.name}>{source.name}: {source.message}</div>)}
-          {marketplaceSizeStatus === "success" && marketplaceSizeQuotes.length > 0 && <div className="size-quote-grid">{marketplaceSizeQuotes.map((quote, index) => <div className={`size-quote-chip ${quote.available === true ? "size-quote-available" : quote.available === false ? "size-quote-unavailable" : "size-quote-unknown"}`} key={`${quote.source}-${quote.label}-${index}`}><strong>{quote.label}</strong><span>{quote.retailer}</span><b>{quote.available === true ? (quote.source === "stockx" ? "Active ask" : quote.source === "flightclub" ? "Listed new size" : "Available") : quote.available === false ? (quote.source === "stockx" ? "No active ask" : "Unavailable") : "Unverified"}</b>{quote.price !== undefined && <small>{money(quote.price, quote.currency)}</small>}</div>)}</div>}
-          {marketplaceSizeStatus === "success" && marketplaceSizeQuotes.length === 0 && <div className="retailer-idle-hint">These sources did not return size-level offers for this model. This does not mean every size is sold out; other retailers may show sizes on their own product pages.</div>}
-          {marketplaceSizeSources.length > 0 && <details className="catalog-sources-details size-source-details"><summary>Size sources checked</summary>{marketplaceSizeSources.map((source) => <p key={source.name}>{source.name}: {source.message}</p>)}</details>}
-        </div>
-        {marketplaceError && <div className="store-error">{marketplaceError}</div>}
-        {marketplaceStatus === "loading" && <div className="store-results-loading">Checking retailer and marketplace listings…</div>}
-        {marketplaceStatus === "success" && <div className="retailer-results-wrap">
-          <div className="retailer-results-meta"><strong>{marketplaceOffers.length} matching online listing{marketplaceOffers.length === 1 ? "" : "s"}</strong><span>{marketplaceCachedAt ? `Cached ${new Date(marketplaceCachedAt).toLocaleString()}` : "Fresh comparison"} · exact size stock not assumed</span></div>
-          {marketplaceSources.length > 0 && <details className="catalog-sources-details"><summary>Sources checked</summary><div className="retailer-source-grid">{marketplaceSources.map((source) => <div className="retailer-source-status" key={`${source.key ?? source.name}-${source.status}`}><strong>{source.name} · {source.status === "success" ? `${source.results} found` : source.status.replaceAll("_", " ")}</strong><span>{source.message}</span></div>)}</div></details>}
-          {marketplaceOffers.length > 0 ? <div className="retailer-offer-grid">{marketplaceOffers.map((offer) => <article className="retailer-offer-card" key={offer.id}><ProductImageFrame className="retailer-offer-image" alt={offer.title} sources={[offer.imageUrl]} /><div className="retailer-offer-body"><div className="retailer-offer-kicker"><span>{offer.retailer}</span><span>ONLINE</span></div><h4>{offer.title}</h4>{offer.styleCode && <small>Style / SKU: {offer.styleCode}</small>}{offer.price !== undefined && <div className="retailer-offer-price"><strong>{money(offer.price, offer.currency)}</strong><span>{offer.priceLabel ?? "Displayed price"}</span></div>}<p className="retailer-offer-stock"><span className="unknown-dot" />{offer.availabilityLabel}</p><a href={offer.url} target="_blank" rel="noreferrer">View listing <ExternalLink size={12} /></a></div></article>)}</div> : <div className="retailer-no-results"><strong>No matching online listings were returned.</strong><span>Check the source statuses above. A product can remain in the catalog after current listings disappear.</span></div>}
-          <p className="store-stock-disclaimer">These are online listings, not confirmed size-level stock. Open the retailer listing to verify the exact size and checkout status.</p>
-        </div>}
-        {marketplaceStatus === "idle" && <div className="retailer-idle-hint">Choose a product above and press Compare offers. No comparison API request is made while typing or changing filters.</div>}
-      </section>}
+      </section>
 
       <section className="watchlist-section" id="watchlist">
         <div className="watchlist-heading"><div><div className="eyebrow dark-eyebrow">YOUR SAVED FINDS</div><h2>Watchlist</h2></div><span>{saved.length} saved</span></div>
@@ -911,7 +988,7 @@ export default function Home() {
         {saved.length ? <div className="watchlist-grid">{saved.map((product) => <article className="watchlist-card" key={product.url}>{product.imageUrl ? <img src={product.imageUrl} alt="" /> : <PackageSearch size={26} />}<div><strong>{product.title}</strong><small>{product.subtitle || product.styleCode || "Saved product"}</small><span>{money(product.price, product.currency)}</span><a href={product.url} target="_blank" rel="noreferrer">Open listing <ExternalLink size={11} /></a></div><button type="button" onClick={() => void toggleSaved(product)} aria-label="Remove from watchlist"><X size={15} /></button></article>)}</div> : <div className="catalog-explorer-empty"><strong>No saved products yet.</strong><span>Save a model from the catalog using its bookmark icon.</span></div>}
       </section>
 
-      <footer className="footer"><div className="footer-brand">OUTLET<span>RADAR</span></div><div className="footer-copy">Independent product-discovery and price-comparison platform. Not affiliated with or endorsed by the brands, retailers or marketplaces displayed. Outlet Radar may earn commissions from qualifying purchases.</div><div className="footer-links"><a href="#catalog">Browse catalog</a><a className="nav-compare-link" href="#retailer-comparison">Compare</a></div></footer>
+      <footer className="footer"><div className="footer-brand">OUTLET<span>RADAR</span></div><div className="footer-copy">Independent product-discovery and price-comparison platform. Not affiliated with or endorsed by the brands, retailers or marketplaces displayed. Outlet Radar may earn commissions from qualifying purchases.</div><div className="footer-links"><a href="#catalog">Browse catalog</a><a className="nav-compare-link" href={activeCompareProduct ? `#catalog-offers-${activeCompareProduct.id}` : "#catalog"}>Compare</a></div></footer>
     </main>
   );
 }

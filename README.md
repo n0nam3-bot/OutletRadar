@@ -1,4 +1,4 @@
-# Outlet Radar — Unified Multi-Brand Search v1.9.3
+# Outlet Radar — Unified Multi-Brand Search v2.0.0
 
 A multi-brand product discovery and price-comparison platform built with Next.js, Vercel, and Neon Postgres. Browse sneaker, apparel and accessory catalogs by brand, discover models that have not previously been searched in the app, compare online listings across StockX, GOAT, Flight Club, Kicks Crew and Google Shopping merchants such as Foot Locker, Champs Sports and JD Sports. Catalog and retailer searches are cached in Neon to conserve free API credits.
 
@@ -8,15 +8,26 @@ Outlet Radar is an independent comparison platform and is not affiliated with or
 
 ## Features in this starter
 
-- **One unified search:** the homepage starts with “What are you hunting for?” and one search box. Search a model such as `Air Jordan 4`, or browse by product type and brand without entering a model name.
-- **Refinements before browsing:** choose product type and brand, then optionally refine by audience, size, price range, color and sale-only. These refinements filter the returned catalog locally and do not make another provider request.
+- **Structured product discovery:** start with “What are you hunting for?”, choose an item type, optional brand, audience and (when known) release year, and enter a product/model query of at least two characters. Empty broad-category searches are intentionally blocked to avoid noisy results and unnecessary provider calls.
+- **Local refinements:** size, color, minimum/maximum price and sale-only refine the discovered catalog. They do not alter the provider query or spend another catalog-search credit; products are only retained when the returned data can confirm the selected attribute.
 - **Multi-brand catalog discovery:** discover product models from StockX, GOAT, Flight Club, Kicks Crew and Google Shopping merchant indexes. Products can appear before anyone has searched for them in Outlet Radar; discontinued models may appear when providers still index them.
-- **Cross-retailer comparison:** select a product to collapse the discovery results and open a focused comparison view with size-level provider signals and current online listings from supported marketplaces and retailers, including Foot Locker when returned by Google Shopping.
+- **Grouped product results:** retailer records are combined into one product card when their model identity matches. Missing audience/year/color metadata can be reconciled across listings, while conflicting known year, audience or color attributes keep distinct variants separate.
+- **Inline exact-product comparison:** press Compare offers on a product card to expand that same card with the selected model’s direct retailer listings, each seller’s own title, price, size signals and direct product URL. Provider search results are held to strict model/variant matching; similar models are not displayed as offers.
 - **Compact mobile-first layout:** the search controls are in the opening panel; advanced refinements can be expanded when needed. The old separate Nike search section and Nike store-directory link have been removed.
 - **Free-tier protection:** catalog and retailer lookups are cached in Neon, with shared monthly safety ceilings of 450 PCKT credits and 200 SerpApi requests. There is no arbitrary daily search cap per visitor; after a provider safety budget is reached, existing cached results remain available and new uncached requests to that source pause.
 - **Watchlist:** save products from the multi-brand catalog. Neon persistence is enabled when `DATABASE_URL` is configured and the schema has been run. The current automated daily price-history job remains Nike-URL-only; other saved retailer links are retained but are not automatically refreshed yet.
 - **Product imagery:** the catalog extracts product artwork from multiple provider image fields and hydrates up to 16 image-less models per uncached browse using cached StockX, GOAT or Flight Club product details. Some source records still do not include an image.
 - **Inventory clarity:** catalog filters use attributes actually supplied by sources. Comparison size signals distinguish StockX active asks, GOAT size-availability flags and Flight Club listed new sizes; these are not final checkout guarantees.
+
+## Version 2.0 changes
+
+- Reworked Find it into a structured discovery request: item type, optional brand, audience, optional release year and a required free-text model description (at least two characters).
+- Kept size, color, price range and sale-only as local result refinements; changing them does not become a new provider search query.
+- Grouped cross-retailer records by normalized brand/category/model tokens. Listings with missing year, audience or color metadata can join a compatible product group; contradictory known year, gender or color attributes remain separate products.
+- Added shared manufacturer style-code matching as a secondary grouping bridge when marketplace titles differ.
+- Compare offers is tied to the selected grouped product, and offers expand inside that product card with each retailer’s own listing title, direct URL, price and available size-level provider signals. Exact matching requires the complete model/variant token set or a matching manufacturer style code.
+- Bumped the Neon catalog and exact-offer cache namespaces so older loosely grouped results are not reused.
+- No Neon schema migration or new environment variables required.
 
 ## Version 1.9.3 changes
 
@@ -122,7 +133,7 @@ Open `http://localhost:3000`.
 
 ### Upgrade from v1.7
 
-Replace the repository contents with this v1.9 project and deploy. If you already ran the v1.7 multi-retailer migration, no additional SQL migration is required: v1.9 reuses `retailer_search_cache` for brand/type catalog discovery. If the retailer tables are not installed, run [`db/migrations/001_multi_retailer.sql`](./db/migrations/001_multi_retailer.sql) or the complete current [`db/schema.sql`](./db/schema.sql) in Neon. Add `PCKT_API_KEY` to enable StockX, GOAT, Flight Club and Kicks Crew catalog discovery, and `SERPAPI_API_KEY` to add Google Shopping merchant results such as Foot Locker when returned. `API_SH_KEY` is not needed for the unified catalog; it remains for legacy Nike-specific routes and the Nike-only scheduled price-check job.
+Replace the repository contents with this v2.0 project and deploy. If you already ran the v1.7 multi-retailer migration, no additional SQL migration is required: v2.0 reuses `retailer_search_cache` for brand/type catalog discovery and exact-product offer caching. If the retailer tables are not installed, run [`db/migrations/001_multi_retailer.sql`](./db/migrations/001_multi_retailer.sql) or the complete current [`db/schema.sql`](./db/schema.sql) in Neon. Add `PCKT_API_KEY` to enable StockX, GOAT, Flight Club and Kicks Crew catalog discovery, and `SERPAPI_API_KEY` to add Google Shopping merchant results such as Foot Locker when returned. `API_SH_KEY` is not needed for the unified catalog; it remains for legacy Nike-specific routes and the Nike-only scheduled price-check job.
 
 ## Environment variables
 

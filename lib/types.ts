@@ -21,10 +21,8 @@ export type NikeProduct = {
   discountPercent?: number;
   sizes?: ProductSize[];
   gender?: ProductGender;
-  /** Shoe sizing audience; useful when Nike labels youth products separately from adult styles. */
   sizeSystem?: "men" | "women" | "youth" | "toddler" | "infant" | "unisex" | "unknown";
   onSale?: boolean;
-  /** Internal cache marker used to distinguish unfiltered v1.2 catalogue rows. */
   catalogVersion?: number;
   category?: ProductCategory;
   sourceFetchedAt?: string;
@@ -35,8 +33,6 @@ export type SearchResponse = {
   meta?: { cached?: boolean; fetchedAt?: string; creditsUsed?: number; cacheSource?: "neon" | "provider" };
   source: "api.sh";
 };
-
-
 
 export type MarketplaceProvider = "stockx" | "goat" | "flightclub" | "kickscrew" | "shopping";
 export type MarketplaceOffer = {
@@ -49,12 +45,15 @@ export type MarketplaceOffer = {
   imageUrl?: string;
   styleCode?: string;
   brand?: string;
+  color?: string;
   price?: number;
   priceLabel?: string;
   currency: string;
   availability: "available" | "unavailable" | "unknown";
   availabilityLabel: string;
   sourceUpdatedAt?: string;
+  releaseYear?: number;
+  sizes?: string[];
   sizeQuotes?: MarketplaceSizeQuote[];
 };
 
@@ -62,6 +61,8 @@ export type CatalogBrowseCategory = "sneakers" | "apparel" | "accessories" | "al
 export type CatalogListing = {
   source: MarketplaceProvider;
   retailer: string;
+  /** Exact title returned by this specific retailer/provider listing. */
+  title?: string;
   url: string;
   providerProductId?: string;
   imageUrl?: string;
@@ -71,6 +72,7 @@ export type CatalogListing = {
   color?: string;
   sizes?: string[];
   gender?: ProductGender;
+  releaseYear?: number;
   onSale?: boolean;
 };
 
@@ -84,6 +86,7 @@ export type MarketplaceSizeQuote = {
   retailer: string;
   source: "stockx" | "goat" | "flightclub" | "kickscrew";
 };
+
 export type CatalogBrowseProduct = {
   id: string;
   title: string;
@@ -101,6 +104,7 @@ export type CatalogBrowseProduct = {
   colors?: string[];
   sizes?: string[];
   gender?: ProductGender;
+  releaseYear?: number;
   onSale?: boolean;
   sizeQuotes?: MarketplaceSizeQuote[];
 };
