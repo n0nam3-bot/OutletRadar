@@ -55,6 +55,7 @@ export type MarketplaceOffer = {
   availability: "available" | "unavailable" | "unknown";
   availabilityLabel: string;
   sourceUpdatedAt?: string;
+  sizeQuotes?: MarketplaceSizeQuote[];
 };
 
 export type CatalogBrowseCategory = "sneakers" | "apparel" | "accessories" | "all";
@@ -62,6 +63,8 @@ export type CatalogListing = {
   source: MarketplaceProvider;
   retailer: string;
   url: string;
+  providerProductId?: string;
+  imageUrl?: string;
   price?: number;
   originalPrice?: number;
   currency?: string;
@@ -69,6 +72,17 @@ export type CatalogListing = {
   sizes?: string[];
   gender?: ProductGender;
   onSale?: boolean;
+};
+
+export type MarketplaceSizeQuote = {
+  label: string;
+  available: boolean | null;
+  price?: number;
+  currency: string;
+  status: string;
+  sizeSystem?: "men" | "women" | "youth" | "unisex" | "unknown";
+  retailer: string;
+  source: "stockx" | "goat" | "flightclub" | "kickscrew";
 };
 export type CatalogBrowseProduct = {
   id: string;
@@ -88,6 +102,7 @@ export type CatalogBrowseProduct = {
   sizes?: string[];
   gender?: ProductGender;
   onSale?: boolean;
+  sizeQuotes?: MarketplaceSizeQuote[];
 };
 
 export type MarketplaceSourceStatus = {

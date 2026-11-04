@@ -207,3 +207,13 @@
 
 /* v1.9.1: keep image tiles square and label incomplete product attributes rather than hiding candidates. */
 .catalog-filter-note{margin-top:7px;padding:5px 6px;background:#fbf7eb;border:1px solid #f0e7cc;color:#88733e;font:7px/1.45 var(--mono);}
+
+/* v1.9.2: focused comparison mode. Hide the discovery hero and results grid
+   while comparing a selected model; keep a compact return bar in their place. */
+.compare-return-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 7%;background:#f2f5ef;border-bottom:1px solid #e3e9df;color:#53614f;font:10px var(--mono)}
+.compare-return-bar span{min-width:0;overflow-wrap:anywhere}
+.compare-return-bar strong{color:#263126}
+.compare-return-bar button{flex:none;border:1px solid #d9e1d4;background:#fff;color:#40553b;padding:8px 11px;font-size:9px;font-weight:700;cursor:pointer}
+.compare-return-bar button:hover{border-color:#a8bb8b;background:#f8fbf5}
+.retailer-compare-standalone{scroll-margin-top:12px}
+@media(max-width:760px){.compare-return-bar{padding:10px 17px;font-size:9px}.compare-return-bar button{padding:8px;font-size:8px}}

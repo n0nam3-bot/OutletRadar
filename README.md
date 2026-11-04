@@ -1,4 +1,4 @@
-# Outlet Radar — Unified Multi-Brand Search v1.9.1
+# Outlet Radar — Unified Multi-Brand Search v1.9.2
 
 A multi-brand product discovery and price-comparison platform built with Next.js, Vercel, and Neon Postgres. Browse sneaker, apparel and accessory catalogs by brand, discover models that have not previously been searched in the app, compare online listings across StockX, GOAT, Flight Club, Kicks Crew and Google Shopping merchants such as Foot Locker, Champs Sports and JD Sports. Catalog and retailer searches are cached in Neon to conserve free API credits.
 
@@ -11,11 +11,22 @@ Outlet Radar is an independent comparison platform and is not affiliated with or
 - **One unified search:** the homepage starts with “What are you hunting for?” and one search box. Search a model such as `Air Jordan 4`, or browse by product type and brand without entering a model name.
 - **Refinements before browsing:** choose product type and brand, then optionally refine by audience, size, price range, color and sale-only. These refinements filter the returned catalog locally and do not make another provider request.
 - **Multi-brand catalog discovery:** discover product models from StockX, GOAT, Flight Club, Kicks Crew and Google Shopping merchant indexes. Products can appear before anyone has searched for them in Outlet Radar; discontinued models may appear when providers still index them.
-- **Cross-retailer comparison:** select a product to compare current online listings from supported marketplaces and retailers, including Foot Locker when returned by Google Shopping.
+- **Cross-retailer comparison:** select a product to collapse the discovery results and open a focused comparison view with size-level provider signals and current online listings from supported marketplaces and retailers, including Foot Locker when returned by Google Shopping.
 - **Compact mobile-first layout:** the search controls are in the opening panel; advanced refinements can be expanded when needed. The old separate Nike search section and Nike store-directory link have been removed.
 - **Free-tier protection:** catalog and retailer lookups are cached in Neon, with shared monthly safety ceilings of 450 PCKT credits and 200 SerpApi requests. There is no arbitrary daily search cap per visitor; after a provider safety budget is reached, existing cached results remain available and new uncached requests to that source pause.
 - **Watchlist:** save products from the multi-brand catalog. Neon persistence is enabled when `DATABASE_URL` is configured and the schema has been run. The current automated daily price-history job remains Nike-URL-only; other saved retailer links are retained but are not automatically refreshed yet.
-- **Inventory clarity:** catalog filters distinguish confirmed attribute matches from possible matches where a provider did not supply size, color, audience, price or sale data. A listed size or online product page is not proof of stock.
+- **Product imagery:** the catalog extracts product artwork from multiple provider image fields and hydrates up to 16 image-less models per uncached browse using cached StockX, GOAT or Flight Club product details. Some source records still do not include an image.
+- **Inventory clarity:** catalog filters use attributes actually supplied by sources. Comparison size signals distinguish StockX active asks, GOAT size-availability flags and Flight Club listed new sizes; these are not final checkout guarantees.
+
+## Version 1.9.2 changes
+
+- Expanded image field extraction for marketplace catalog and product-detail responses, including nested image/picture/media objects.
+- Catalog discovery hydrates up to 16 image-less cards per uncached catalog browse from StockX, GOAT or Flight Club product details; image lookups are cached in Neon for 30 days. Products without upstream artwork remain clearly image-unavailable rather than receiving fabricated images.
+- Corrected marketplace gender fallback so an individual listing marked `Unknown` does not mask a known audience on the grouped catalog product; this is especially important when interpreting GOAT numeric sizes.
+- Normalized StockX size-system values that use underscore/hyphen formats before identifying Men's, Women's or Youth variants.
+- Size quote cache is now six hours; cache identity is versioned so old ambiguous size records are not reused.
+- In product comparison mode, the discovery hero and catalog grid stay collapsed, a compact return bar remains visible, and the page scrolls to the expanded comparison panel once per selected product.
+- No Neon schema migration or additional environment variables required.
 
 ## Version 1.2 changes
 

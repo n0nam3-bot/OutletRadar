@@ -58,7 +58,35 @@ function records(payload: unknown): Record<string, unknown>[] {
   arrays.sort((a, b) => b.length - a.length);
   return arrays[0] ?? [];
 }
-function httpUrl(raw: string) { try { const u = new URL(raw); return ["http:", "https:"].includes(u.protocol) ? u.toString() : ""; } catch { return ""; } }
+function httpUrl(raw: string) { try { const u = new URL(raw.startsWith("//") ? `https:${raw}` : raw); return ["http:", "https:"].includes(u.protocol) ? u.toString() : ""; } catch { return ""; } }
+function imageUrlFromValue(value: unknown, depth = 0): string {
+  if (depth > 6 || value == null) return "";
+  if (typeof value === "string") return httpUrl(value);
+  if (Array.isArray(value)) {
+    for (const entry of value.slice(0, 20)) { const found = imageUrlFromValue(entry, depth + 1); if (found) return found; }
+    return "";
+  }
+  const record = obj(value); if (!record) return "";
+  for (const key of ["url", "src", "src_url", "image_url", "imageUrl", "imageURL", "image_url_https", "original", "original_url", "originalSrc", "large", "large_url", "thumbnail", "thumbnail_url", "href", "image_src", "imageSrc", "featured_image_url", "product_image_url", "productImageUrl", "picture_url", "original_image", "originalImage", "media_url", "mediaUrl", "secure_url", "main_image_url", "product_thumbnail"]) {
+    if (typeof record[key] === "string") { const found = httpUrl(record[key] as string); if (found) return found; }
+  }
+  for (const key of ["images", "gallery", "image", "media", "photos", "image_360", "picture", "pictures", "primary_image", "primaryImage", "featured_image", "featuredImage", "product_image", "productImage", "image_urls", "imageUrls", "product_images", "productImages", "product_thumbnail", "productThumbnail"]) {
+    if (record[key] !== undefined) { const found = imageUrlFromValue(record[key], depth + 1); if (found) return found; }
+  }
+  for (const [key, child] of Object.entries(record)) {
+    if (/image|picture|thumbnail|photo|media/i.test(key)) {
+      const found = imageUrlFromValue(child, depth + 1);
+      if (found) return found;
+    }
+  }
+  return "";
+}
+function imageUrlFromItem(item: Record<string, unknown>): string | undefined {
+  for (const key of ["image_url", "imageUrl", "imageURL", "mainPictureUrl", "gridPictureUrl", "mainGlowPictureUrl", "gridGlowPictureUrl", "pictureUrl", "imageSrc", "thumbnail", "thumbnailUrl", "thumbnail_url", "main_image_url", "product_image_url", "featured_image_url", "productImageUrl", "primary_image", "primaryImage", "image", "images", "gallery", "image_360", "media", "photos", "picture", "pictures", "image_urls", "imageUrls", "product_images", "productImages", "picture_url", "product_thumbnail"]) {
+    if (item[key] !== undefined) { const found = imageUrlFromValue(item[key]); if (found) return found; }
+  }
+  return undefined;
+}
 function productUrl(source: SourceKey, item: Record<string, unknown>) {
   const slug = str(item.slug, item.handle, item.url_key);
   const raw = httpUrl(str(item.url, item.link, item.product_url, item.productUrl, item.product_link));
@@ -88,7 +116,7 @@ function normalizePckt(source: ProviderKey, x: Record<string, unknown>, query: s
   const price = num(x.lowest_ask, x.lowestAsk, x.price, x.specialDisplayPriceCents ? Number(x.specialDisplayPriceCents) / 100 : undefined, x.extracted_price);
   return {
     id: `${source}:${str(x.id, x.product_id, x.productId, x.slug, sku, url)}`, source, retailer: name, channel: "online", title, url,
-    imageUrl: httpUrl(str(x.image_url, x.imageUrl, x.mainPictureUrl, x.gridPictureUrl, x.thumbnail)) || undefined,
+    imageUrl: imageUrlFromItem(x),
     styleCode: sku || undefined, brand: brand || undefined, price, currency: "USD",
     priceLabel: price ? (source === "stockx" || source === "goat" ? "Lowest ask" : "Displayed price") : undefined,
     availability: "unknown", availabilityLabel: "Online listing found · selected-size stock not confirmed by this search",
@@ -102,7 +130,7 @@ function normalizeShopping(x: Record<string, unknown>, query: string): Marketpla
   const price = num(x.extracted_price, x.price);
   return {
     id: `shopping:${str(x.product_id, x.position, title)}:${retailer}`, source: "shopping", retailer, channel: "online", title, url,
-    imageUrl: httpUrl(str(x.thumbnail, x.image)) || undefined, styleCode: sku || undefined,
+    imageUrl: imageUrlFromItem(x), styleCode: sku || undefined,
     price, priceLabel: price ? "Displayed price" : undefined, currency: "USD", availability: "unknown",
     availabilityLabel: "Retailer listing found · selected-size and live stock not independently verified",
   };

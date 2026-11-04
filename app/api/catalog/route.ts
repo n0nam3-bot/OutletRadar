@@ -82,7 +82,7 @@ function textValues(...values: unknown[]): string[] {
         else {
           const record = obj(item);
           if (record) {
-            const label = str(record.size, record.label, record.name, record.value, record.size_label, record.sizeName, record.size_name, record.display_value, record.displayValue);
+            const label = str(record.size, record.label, record.name, record.value, record.size_label, record.sizeName, record.size_name, record.display_value, record.displayValue, record.color, record.name);
             if (label) found.push(label);
           }
         }
@@ -90,6 +90,100 @@ function textValues(...values: unknown[]): string[] {
     }
   }
   return [...new Set(found)];
+}
+
+function extractSizeLabels(item: Record<string, unknown>): string[] {
+  const found = new Set<string>();
+  const sizeKeys = new Set(["sizes", "size", "available_sizes", "availablesizes", "size_options", "sizeoptions", "size_variants", "sizevariants", "variants", "size_chart", "sizechart", "size_options_by_region"]);
+  const labelKeys = ["size", "label", "size_label", "sizelabel", "size_name", "sizename", "display_value", "displayvalue", "variant_value", "variantvalue", "base_size", "basesize", "us_size", "ussize", "value"];
+  const walk = (value: unknown, parentKey = "", depth = 0) => {
+    if (depth > 7 || value == null) return;
+    if (typeof value === "string" || typeof value === "number") {
+      if (sizeKeys.has(parentKey.toLowerCase()) && String(value).trim()) found.add(String(value).trim());
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.slice(0, 200).forEach((entry) => walk(entry, parentKey, depth + 1));
+      return;
+    }
+    const record = obj(value);
+    if (!record) return;
+    const baseSize = str(record.base_size, record.baseSize);
+    const baseType = str(record.base_type, record.baseType);
+    if (baseSize) {
+      const audience = /women|us w/i.test(baseType) ? "W" : /youth|grade|kids|us y/i.test(baseType) ? "Y" : /men|us m/i.test(baseType) ? "M" : "";
+      found.add(`${baseSize}${audience ? ` ${audience}` : ""}`.trim());
+    }
+    for (const key of labelKeys) {
+      const candidate = record[key];
+      if ((typeof candidate === "string" || typeof candidate === "number") && String(candidate).trim()) {
+        const text = String(candidate).trim();
+        if (/^(?:us\s*)?(?:men(?:'s)?\s*)?(?:women(?:'s)?\s*)?\d+(?:\.\d+)?(?:\s*[my])?$/i.test(text) || /^\d+(?:\.\d+)?\s*(?:us\s*)?(?:m|w|y)$/i.test(text)) found.add(text);
+      }
+    }
+    for (const [key, child] of Object.entries(record)) {
+      if (sizeKeys.has(key.toLowerCase()) || ["base_size", "basesize", "size_label", "size_name", "display_value", "variant_value", "us_size"].includes(key.toLowerCase())) walk(child, key.toLowerCase(), depth + 1);
+      else if (obj(child) || Array.isArray(child)) walk(child, key.toLowerCase(), depth + 1);
+    }
+  };
+  for (const key of ["sizes", "available_sizes", "availableSizes", "size_options", "sizeOptions", "size_variants", "sizeVariants", "variants", "variant_sizes", "variantSizes", "size_chart", "sizeChart"]) {
+    if (item[key] !== undefined) walk(item[key], key.toLowerCase(), 0);
+  }
+  return [...found].filter((value) => value.length <= 24);
+}
+
+function imageUrlFromValue(value: unknown, depth = 0): string {
+  if (depth > 5 || value == null) return "";
+  if (typeof value === "string") return httpUrl(value);
+  if (Array.isArray(value)) {
+    for (const entry of value.slice(0, 12)) {
+      const found = imageUrlFromValue(entry, depth + 1);
+      if (found) return found;
+    }
+    return "";
+  }
+  const record = obj(value);
+  if (!record) return "";
+  for (const key of ["url", "src", "src_url", "image_url", "imageUrl", "imageURL", "original", "original_url", "originalSrc", "large", "large_url", "thumbnail", "thumbnail_url", "main", "main_url", "secure_url", "href", "image_src", "imageSrc", "featured_image_url", "product_image_url", "productImageUrl", "picture_url", "pictureUrl", "original_image", "originalImage", "media_url", "mediaUrl"]) {
+    const candidate = record[key];
+    if (typeof candidate === "string") {
+      const found = httpUrl(candidate);
+      if (found) return found;
+    }
+  }
+  for (const key of ["images", "gallery", "image", "media", "photos", "image_360", "image360", "picture", "pictures", "primary_image", "primaryImage", "featured_image", "featuredImage", "product_image", "productImage", "image_urls", "imageUrls", "product_images", "productImages", "product_thumbnail", "productThumbnail"]) {
+    if (record[key] !== undefined) {
+      const found = imageUrlFromValue(record[key], depth + 1);
+      if (found) return found;
+    }
+  }
+  // Marketplace schemas add new image fields frequently. Inspect any other
+  // image-like property rather than dropping valid nested CDN URLs.
+  for (const [key, child] of Object.entries(record)) {
+    if (/image|picture|thumbnail|photo|media/i.test(key)) {
+      const found = imageUrlFromValue(child, depth + 1);
+      if (found) return found;
+    }
+  }
+  return "";
+}
+
+function imageUrlFromItem(item: Record<string, unknown>): string | undefined {
+  for (const key of ["image_url", "imageUrl", "imageURL", "mainPictureUrl", "gridPictureUrl", "mainGlowPictureUrl", "gridGlowPictureUrl", "pictureUrl", "imageSrc", "main_image", "mainImage", "featured_image", "featuredImage", "product_image", "productImage", "small_image", "smallImage", "thumbnail", "thumbnailUrl", "thumbnail_url", "primary_image", "primaryImage", "image", "images", "image_urls", "imageUrls", "gallery", "image_360", "image360", "media", "photos", "picture", "pictures", "featured_image_url", "product_image_url", "productImageUrl", "picture_url", "original_image", "originalImage", "product_thumbnail", "productThumbnail"]) {
+    if (item[key] === undefined) continue;
+    const found = imageUrlFromValue(item[key]);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function providerProductId(source: PcktKey, item: Record<string, unknown>): string | undefined {
+  const value = source === "goat"
+    ? str(item.goat_id, item.goatId, item.product_id, item.productId, item.id, item.slug)
+    : source === "flightclub"
+      ? str(item.slug, item.product_slug, item.productSlug, item.id, item.product_id)
+      : str(item.id, item.product_id, item.productId, item.productID, item.slug);
+  return value || undefined;
 }
 function inferGender(item: Record<string, unknown>, title: string): NonNullable<CatalogBrowseProduct["gender"]> {
   const raw = norm(str(item.gender, item.audience, item.department, item.target_gender, item.product_gender));
@@ -107,8 +201,8 @@ function catalogFields(item: Record<string, unknown>, title: string) {
   const price = num(item.extracted_price, item.price, item.lowest_price, item.current_price, item.sale_price, item.amount);
   const originalPrice = num(item.old_price, item.original_price, item.retail_price, item.full_price, item.compare_at_price, item.msrp);
   const explicitSale = bool(item.on_sale, item.onSale, item.is_sale, item.isSale, item.sale, item.clearance);
-  const sizes = textValues(item.sizes, item.available_sizes, item.availableSizes, item.size_options, item.sizeOptions, item.size_variants, item.sizeVariants, item.variants);
-  const colors = textValues(item.color, item.colour, item.colorway, item.color_name, item.colorName, item.colors, item.color_options, item.colorOptions);
+  const sizes = extractSizeLabels(item);
+  const colors = textValues(item.color, item.colour, item.colorway, item.color_name, item.colorName, item.colors, item.color_options, item.colorOptions, item.secondary_title, item.secondaryTitle);
   return {
     price,
     originalPrice,
@@ -121,7 +215,7 @@ function catalogFields(item: Record<string, unknown>, title: string) {
 }
 
 function httpUrl(raw: string): string {
-  try { const url = new URL(raw); return ["http:", "https:"].includes(url.protocol) ? url.toString() : ""; }
+  try { const url = new URL(raw.startsWith("//") ? `https:${raw}` : raw); return ["http:", "https:"].includes(url.protocol) ? url.toString() : ""; }
   catch { return ""; }
 }
 function records(payload: unknown): Record<string, unknown>[] {
@@ -253,8 +347,9 @@ function normalizePckt(source: PcktKey, item: Record<string, unknown>, brandFilt
     source, retailer: name, url,
     title: str(item.title, item.display_name, item.product_title, item.name, item.model_name, item.model),
     brand, category: category === "all" ? inferCatalogCategory(item, title) : category,
-    imageUrl: httpUrl(str(item.image_url, item.imageUrl, item.mainPictureUrl, item.gridPictureUrl, item.thumbnail, item.image)) || undefined,
+    imageUrl: imageUrlFromItem(item),
     styleCode: str(item.sku, item.style_code, item.styleCode, item.product_code, item.product_id) || undefined,
+    providerProductId: providerProductId(source, item),
     ...catalogFields(item, title),
   };
 }
@@ -266,7 +361,7 @@ function normalizeShopping(item: Record<string, unknown>, brandFilter: string, c
   if (!title || !retailer || !url || !matchesBrand(brand, title, brandFilter) || !matchesCategory(item, title, category, "shopping") || !matchesModelNumbers(title, item, searchQuery)) return null;
   return {
     source: "shopping", retailer, url, title, brand, category: category === "all" ? inferCatalogCategory(item, title) : category,
-    imageUrl: httpUrl(str(item.thumbnail, item.image, item.image_url)) || undefined,
+    imageUrl: imageUrlFromItem(item),
     styleCode: str(item.product_id, item.sku, item.gtin) || undefined,
     ...catalogFields(item, title),
   };
@@ -285,7 +380,7 @@ function groupListings(listings: InternalListing[]): CatalogBrowseProduct[] {
         styleCode: listing.styleCode,
         imageUrl: listing.imageUrl,
         sources: [listing.retailer],
-        listings: [{ source: listing.source, retailer: listing.retailer, url: listing.url, price: listing.price, originalPrice: listing.originalPrice, currency: listing.currency, color: listing.color, sizes: listing.sizes, gender: listing.gender, onSale: listing.onSale }],
+        listings: [{ source: listing.source, retailer: listing.retailer, url: listing.url, providerProductId: listing.providerProductId, imageUrl: listing.imageUrl, price: listing.price, originalPrice: listing.originalPrice, currency: listing.currency, color: listing.color, sizes: listing.sizes, gender: listing.gender, onSale: listing.onSale }],
         price: listing.price,
         originalPrice: listing.originalPrice,
         currency: listing.currency,
@@ -299,7 +394,7 @@ function groupListings(listings: InternalListing[]): CatalogBrowseProduct[] {
       if (!current.imageUrl && listing.imageUrl) current.imageUrl = listing.imageUrl;
       if (!current.styleCode && listing.styleCode) current.styleCode = listing.styleCode;
       if (!current.sources.includes(listing.retailer)) current.sources.push(listing.retailer);
-      current.listings.push({ source: listing.source, retailer: listing.retailer, url: listing.url, price: listing.price, originalPrice: listing.originalPrice, currency: listing.currency, color: listing.color, sizes: listing.sizes, gender: listing.gender, onSale: listing.onSale });
+      current.listings.push({ source: listing.source, retailer: listing.retailer, url: listing.url, providerProductId: listing.providerProductId, imageUrl: listing.imageUrl, price: listing.price, originalPrice: listing.originalPrice, currency: listing.currency, color: listing.color, sizes: listing.sizes, gender: listing.gender, onSale: listing.onSale });
       if (listing.price !== undefined && (current.price === undefined || listing.price < current.price)) {
         current.price = listing.price;
         current.originalPrice = listing.originalPrice;
@@ -372,6 +467,105 @@ async function writeCache(key: string, query: string, products: CatalogBrowsePro
   `;
 }
 
+function productDetailRecord(payload: unknown): Record<string, unknown> | null {
+  const root = obj(payload);
+  if (!root) return null;
+  const stack: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+  const seen = new Set<object>();
+  while (stack.length) {
+    const current = stack.shift()!;
+    if (!current.value || typeof current.value !== "object" || current.depth > 7 || seen.has(current.value as object)) continue;
+    seen.add(current.value as object);
+    if (!Array.isArray(current.value)) {
+      const record = current.value as Record<string, unknown>;
+      if (str(record.title, record.name, record.model, record.product_name) && (imageUrlFromItem(record) || Array.isArray(record.variants) || Array.isArray(record.gallery))) return record;
+      for (const child of Object.values(record)) if (child && typeof child === "object") stack.push({ value: child, depth: current.depth + 1 });
+    } else {
+      for (const child of current.value) if (child && typeof child === "object") stack.push({ value: child, depth: current.depth + 1 });
+    }
+  }
+  return null;
+}
+
+async function cachedProviderDetail(source: "stockx" | "goat" | "flightclub", id: string): Promise<Record<string, unknown> | null> {
+  const sql = getDb();
+  if (!sql) return null;
+  const key = createHash("sha256").update(`catalog-product-detail:v1:${source}:${id}`).digest("hex");
+  const rows = await sql`SELECT results_json FROM retailer_search_cache WHERE cache_key = ${key} AND expires_at > now() LIMIT 1` as Array<{ results_json: unknown }>;
+  const raw = rows[0]?.results_json;
+  if (!raw) return null;
+  const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+  return obj(parsed);
+}
+
+async function saveProviderDetail(source: "stockx" | "goat" | "flightclub", id: string, detail: Record<string, unknown>) {
+  const sql = getDb();
+  if (!sql) return;
+  const key = createHash("sha256").update(`catalog-product-detail:v1:${source}:${id}`).digest("hex");
+  await sql`
+    INSERT INTO retailer_search_cache (cache_key, query_text, results_json, sources_json, cached_at, expires_at)
+    VALUES (${key}, ${`product-detail:${source}:${id}`}, ${JSON.stringify(detail)}::jsonb, '[]'::jsonb, now(), now() + interval '30 days')
+    ON CONFLICT (cache_key) DO UPDATE SET results_json = EXCLUDED.results_json, cached_at = now(), expires_at = now() + interval '30 days'
+  `;
+}
+
+// Search endpoints frequently omit artwork. Hydrate a bounded number of image-less
+// catalog cards from the provider detail endpoints, then retain those details in Neon.
+// StockX/GOAT detail calls cost 0.4 credits; Flight Club detail costs 1 credit.
+async function enrichMissingCatalogImages(products: CatalogBrowseProduct[]) {
+  const missing = products.filter((product) => !product.imageUrl && (product.listings ?? []).some((listing) =>
+    ["stockx", "goat", "flightclub"].includes(listing.source) && listing.providerProductId,
+  )).slice(0, 16);
+
+  for (const product of missing) {
+    const candidates = (product.listings ?? [])
+      .filter((listing) => ["stockx", "goat", "flightclub"].includes(listing.source) && listing.providerProductId)
+      .sort((a, b) => (a.source === "flightclub" ? 1 : 0) - (b.source === "flightclub" ? 1 : 0));
+    // One image lookup per product keeps latency and the free-credit budget bounded.
+    const listing = candidates[0];
+    if (!listing || !["stockx", "goat", "flightclub"].includes(listing.source) || !listing.providerProductId) continue;
+    const source = listing.source as "stockx" | "goat" | "flightclub";
+    try {
+      let detail = await cachedProviderDetail(source, listing.providerProductId);
+      if (!detail) {
+        const apiKey = process.env.PCKT_API_KEY;
+        if (!apiKey) continue;
+        const units = source === "flightclub" ? 1 : 0.4;
+        if (!(await reserveBudget("pckt", units, PCKT_MONTHLY_BUDGET))) continue;
+        await waitForPcktSlot();
+        const url = source === "flightclub"
+          ? new URL("https://api.pckt.sh/v1/flightclub/product")
+          : new URL(`https://api.pckt.sh/v1/catalog/${source}/product`);
+        url.searchParams.set("id", listing.providerProductId);
+        if (source === "flightclub") {
+          url.searchParams.set("countryCode", "US");
+          url.searchParams.set("currencyCode", "USD");
+        } else {
+          url.searchParams.set("market", "US");
+        }
+        const payload = await fetchJson(url, { Authorization: `Bearer ${apiKey}`, Accept: "application/json" });
+        detail = productDetailRecord(payload);
+        // Cache a sentinel too, so products without upstream artwork don't consume
+        // another request every time the same 12-hour catalog is rediscovered.
+        await saveProviderDetail(source, listing.providerProductId, detail ?? { _imageLookupAttempted: true });
+      }
+      if (!detail || detail._imageLookupAttempted === true) continue;
+      const image = imageUrlFromItem(detail);
+      if (image && !product.imageUrl) product.imageUrl = image;
+      const colorInfo = catalogFields(detail, str(detail.title, product.title));
+      if (colorInfo.color) {
+        product.color = product.color || colorInfo.color;
+        product.colors = [...new Set([...(product.colors ?? []), colorInfo.color])];
+      }
+      if ((product.gender === "Unknown" || !product.gender) && colorInfo.gender !== "Unknown") product.gender = colorInfo.gender;
+      if (!product.sizes?.length && colorInfo.sizes?.length) product.sizes = colorInfo.sizes;
+    } catch {
+      // A missing image is cosmetic; never fail product discovery when detail enrichment fails.
+    }
+  }
+  return products;
+}
+
 export async function GET(request: NextRequest) {
   const categoryValue = (request.nextUrl.searchParams.get("category") || "sneakers").toLowerCase();
   const category = (["sneakers", "apparel", "accessories", "all"] as string[]).includes(categoryValue) ? categoryValue as CatalogBrowseCategory : null;
@@ -391,7 +585,7 @@ export async function GET(request: NextRequest) {
   const searchTerm = category === "sneakers" || category === "all"
     ? (queryParts.join(" ") || "sneakers")
     : [...queryParts, typeLabel(category)].filter(Boolean).join(" ") || typeLabel(category);
-  const cacheIdentity = `catalog:${category}:${brandValue}:${norm(userQuery)}`;
+  const cacheIdentity = `catalog:v3:${category}:${brandValue}:${norm(userQuery)}`;
   const cacheKey = createHash("sha256").update(cacheIdentity).digest("hex");
   try {
     const cached = await readCache(cacheKey);
@@ -458,7 +652,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const products = groupListings(listings);
+  const products = await enrichMissingCatalogImages(groupListings(listings));
   const cacheQuery = `catalog: ${category} / ${brandValue} / ${userQuery || "all models"}`;
   try { await writeCache(cacheKey, cacheQuery, products, sources); }
   catch { /* keep discovery results visible if a nonessential cache write fails */ }
