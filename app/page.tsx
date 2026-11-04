@@ -5,13 +5,26 @@ import {
   ArrowDownUp, ArrowRight, Check, ExternalLink, Heart,
   MapPin, PackageSearch, Search, ShieldCheck, ShoppingBag, Sparkles, Tag, X,
 } from "lucide-react";
-import type { MarketplaceOffer, MarketplaceSourceStatus, NearbyStore, NikeProduct, ProductSize } from "@/lib/types";
+import type { CatalogBrowseCategory, CatalogBrowseProduct, MarketplaceOffer, MarketplaceSourceStatus, NearbyStore, NikeProduct, ProductSize } from "@/lib/types";
 
 type Tab = "search" | "saved";
 type Category = "All" | "Shoes" | "Apparel" | "Accessories" | "Other";
 type Status = "idle" | "loading" | "success" | "error";
 
 const SUGGESTED_SEARCHES = ["Air Max 90", "Dunk Low", "Vomero 5", "Tech Fleece"];
+const CATALOG_TYPES: Array<{ value: CatalogBrowseCategory; label: string }> = [
+  { value: "sneakers", label: "Sneakers & shoes" },
+  { value: "apparel", label: "Apparel" },
+  { value: "accessories", label: "Accessories" },
+];
+const CATALOG_BRANDS = [
+  { value: "all", label: "All brands" }, { value: "jordan", label: "Jordan" }, { value: "nike", label: "Nike" },
+  { value: "adidas", label: "Adidas" }, { value: "new balance", label: "New Balance" }, { value: "asics", label: "ASICS" },
+  { value: "puma", label: "Puma" }, { value: "converse", label: "Converse" }, { value: "reebok", label: "Reebok" },
+  { value: "vans", label: "Vans" }, { value: "yeezy", label: "Yeezy" }, { value: "hoka", label: "HOKA" },
+  { value: "on running", label: "On Running" }, { value: "crocs", label: "Crocs" }, { value: "salomon", label: "Salomon" },
+  { value: "timberland", label: "Timberland" }, { value: "underarmour", label: "Under Armour" },
+];
 const CATEGORIES: Category[] = ["All", "Shoes", "Apparel", "Accessories", "Other"];
 const GENDERS = [{ value: "all", label: "All audiences" }, { value: "men", label: "Men" }, { value: "women", label: "Women" }, { value: "kids", label: "Kids / Youth" }, { value: "unisex", label: "Unisex" }];
 const LOCAL_KEY = "nike-clearance-finder:saved:v1";
@@ -144,6 +157,13 @@ export default function Home() {
   const [marketplaceStatus, setMarketplaceStatus] = useState<Status>("idle");
   const [marketplaceError, setMarketplaceError] = useState("");
   const [marketplaceCachedAt, setMarketplaceCachedAt] = useState<string | null>(null);
+  const [catalogType, setCatalogType] = useState<CatalogBrowseCategory>("sneakers");
+  const [catalogBrand, setCatalogBrand] = useState("all");
+  const [catalogProducts, setCatalogProducts] = useState<CatalogBrowseProduct[]>([]);
+  const [catalogSources, setCatalogSources] = useState<Array<MarketplaceSourceStatus & { key?: string }>>([]);
+  const [catalogStatus, setCatalogStatus] = useState<Status>("idle");
+  const [catalogError, setCatalogError] = useState("");
+  const [catalogCachedAt, setCatalogCachedAt] = useState<string | null>(null);
   const [saleOnly, setSaleOnly] = useState(false);
   const [genderFilter, setGenderFilter] = useState("all");
   const [suggestions, setSuggestions] = useState<NikeProduct[]>([]);
@@ -309,9 +329,30 @@ export default function Home() {
     }
   }
 
-  async function compareRetailers() {
-    const term = query.trim();
+  async function browseCatalog() {
+    setCatalogStatus("loading");
+    setCatalogError("");
+    try {
+      const params = new URLSearchParams({ category: catalogType, brand: catalogBrand });
+      const response = await fetch(`/api/catalog?${params.toString()}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Catalog browse failed.");
+      setCatalogProducts(Array.isArray(data.products) ? data.products : []);
+      setCatalogSources(Array.isArray(data.sources) ? data.sources : []);
+      setCatalogCachedAt(data.cachedAt ? String(data.cachedAt) : null);
+      setCatalogStatus("success");
+    } catch (caught) {
+      setCatalogError(caught instanceof Error ? caught.message : "Catalog browse failed.");
+      setCatalogStatus("error");
+      setCatalogProducts([]);
+    }
+  }
+
+  async function compareRetailers(searchTerm = query) {
+    const term = searchTerm.trim();
     if (term.length < 2) { setMarketplaceError("Enter a product or model name first."); return; }
+    setQuery(term);
+    setSelectedProductUrl("");
     setMarketplaceStatus("loading");
     setMarketplaceError("");
     try {
@@ -326,6 +367,14 @@ export default function Home() {
       setMarketplaceError(caught instanceof Error ? caught.message : "Retailer comparison failed.");
       setMarketplaceStatus("error");
     }
+  }
+
+  function compareCatalogProduct(product: CatalogBrowseProduct) {
+    const productQuery = product.title.toLowerCase().includes(product.brand.toLowerCase())
+      ? product.title
+      : `${product.brand} ${product.title}`;
+    void compareRetailers(productQuery);
+    window.setTimeout(() => document.getElementById("retailer-comparison")?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
   }
 
   function chooseSuggestion(product: NikeProduct) {
@@ -474,16 +523,17 @@ export default function Home() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <a className="brand-mark" href="#top" aria-label="Nike Clearance Finder home">
+        <a className="brand-mark" href="#top" aria-label="Outlet Radar home">
           <span className="brand-icon">N</span>
           <span>OUTLET<span className="brand-light">RADAR</span></span>
         </a>
         <nav className="topnav" aria-label="Main navigation">
-          <a href="#search" className={tab === "search" ? "nav-active" : ""} onClick={() => setTab("search")}>Find deals</a>
+          <a href="#catalog">Browse catalog</a>
+          <a href="#search" className={tab === "search" ? "nav-active" : ""} onClick={() => setTab("search")}>Search Nike</a>
           <a href="#watchlist" className={tab === "saved" ? "nav-active" : ""} onClick={() => setTab("saved")}>Watchlist <span className="nav-count">{saved.length}</span></a>
           <a href="https://www.nike.com/retail/directory/united-states" target="_blank" rel="noreferrer">Store directory <ExternalLink size={12} /></a>
         </nav>
-        <div className="topbar-right"><span className="live-dot" /> US PRODUCT SEARCH</div>
+        <div className="topbar-right"><span className="live-dot" /> MULTI-BRAND PRODUCT SEARCH</div>
       </header>
 
       <section className="hero" id="top">
@@ -491,9 +541,9 @@ export default function Home() {
         <div className="hero-content">
           <div className="eyebrow"><span className="eyebrow-line" /> THE HUNT STARTS HERE</div>
           <h1>Find the pair.<br /><em>Find the price.</em></h1>
-          <p className="hero-copy">Search Nike styles, compare marketplace and retailer listings, and narrow results by audience and size. Reuse cached searches to conserve free API credits.</p>
+          <p className="hero-copy">Discover products across sneaker brands and marketplaces, including older and discontinued models. Compare online retailer listings, then narrow results by audience and size.</p>
           <div className="hero-points">
-            <span><Check size={14} /> US catalog search</span>
+            <span><Check size={14} /> Multi-brand catalog</span>
             <span><Check size={14} /> Sale price comparison</span>
             <span><Check size={14} /> Size and audience filters</span>
           </div>
@@ -506,13 +556,42 @@ export default function Home() {
         </div>
       </section>
 
+      <section className="catalog-explorer" id="catalog" aria-label="Browse the product catalog">
+        <div className="catalog-explorer-heading">
+          <div>
+            <div className="eyebrow dark-eyebrow">01 / PRODUCT DISCOVERY CATALOG</div>
+            <h2>Browse beyond today's releases.</h2>
+            <p>Choose a product type and brand to discover model names already indexed by marketplace catalogs—even if you have never searched for them here and even if the original brand has discontinued them.</p>
+          </div>
+          <div className="catalog-explorer-stamp"><span>CATALOG</span><strong>NOT JUST<br />WHAT'S NEW</strong></div>
+        </div>
+        <div className="catalog-selector-row">
+          <label className="catalog-select-field"><span>PRODUCT TYPE</span><select value={catalogType} onChange={(event) => { setCatalogType(event.target.value as CatalogBrowseCategory); setCatalogStatus("idle"); setCatalogProducts([]); setCatalogSources([]); setCatalogCachedAt(null); }}>{CATALOG_TYPES.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label>
+          <label className="catalog-select-field"><span>BRAND</span><select value={catalogBrand} onChange={(event) => { setCatalogBrand(event.target.value); setCatalogStatus("idle"); setCatalogProducts([]); setCatalogSources([]); setCatalogCachedAt(null); }}>{CATALOG_BRANDS.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label>
+          <button type="button" className="catalog-browse-button" onClick={() => void browseCatalog()} disabled={catalogStatus === "loading"}>{catalogStatus === "loading" ? <span className="mini-spinner" /> : <PackageSearch size={16} />} {catalogStatus === "loading" ? "Browsing catalog" : "Browse catalog"}<ArrowRight size={15} /></button>
+        </div>
+        <p className="catalog-explorer-note">Catalog discovery searches marketplace indexes and, when configured, Google Shopping. An uncached sneaker browse can use up to 2.2 PCKT credits plus one SerpApi search; apparel/accessory browsing uses fewer PCKT sources. Neon reuses the same brand/type browse for 12 hours. No per-visitor daily search cap is applied, but shared monthly provider budgets protect the free allowances. Catalog presence is not proof of current size stock.</p>
+        {catalogError && <div className="store-error">{catalogError}</div>}
+        {catalogStatus === "loading" && <div className="store-results-loading">Discovering product names across marketplace catalogs…</div>}
+        {catalogStatus === "idle" && <div className="catalog-explorer-empty"><strong>Start with a brand or browse all brands.</strong><span>Products can appear here before anyone searches for the exact model in Outlet Radar. Older models may be included when indexed by the connected sources.</span></div>}
+        {catalogStatus === "success" && <div className="catalog-browser-results">
+          <div className="catalog-browser-meta"><strong>{catalogProducts.length} catalog product{catalogProducts.length === 1 ? "" : "s"} discovered</strong><span>{catalogCachedAt ? `Cached ${new Date(catalogCachedAt).toLocaleString()}` : "Fresh discovery"} · provider catalog snapshots may be up to 24 hours old</span></div>
+          {catalogSources.length > 0 && <div className="retailer-source-grid">{catalogSources.map((source) => <div className="retailer-source-status" key={`${source.key ?? source.name}-${source.status}`}><strong>{source.name} · {source.status === "success" ? `${source.results} found` : source.status.replaceAll("_", " ")}</strong><span>{source.message}</span></div>)}</div>}
+          {catalogProducts.length > 0 ? <div className="catalog-product-grid">{catalogProducts.map((product) => <article className="catalog-product-card" key={product.id}>
+            <div className="catalog-product-image">{product.imageUrl ? <img src={product.imageUrl} alt="" loading="lazy" /> : <PackageSearch size={28} />}</div>
+            <div className="catalog-product-body"><div className="catalog-product-brand">{product.brand} <span>{product.category.toUpperCase()}</span></div><h3>{product.title}</h3>{product.styleCode && <small>Style / SKU: {product.styleCode}</small>}<div className="catalog-product-sources">Indexed by {product.sources.join(" · ")}</div><button type="button" onClick={() => compareCatalogProduct(product)}>Compare retailer offers <ArrowRight size={13} /></button></div>
+          </article>)}</div> : <div className="catalog-explorer-empty"><strong>No catalog models were returned for this selection.</strong><span>Check the source statuses above, try a different brand or product type, or make sure PCKT_API_KEY and/or SERPAPI_API_KEY are configured in Vercel.</span></div>}
+          <p className="catalog-disclaimer">Older or discontinued models may be present in marketplace catalog indexes, but catalog presence does not guarantee an active listing. Choose Compare retailer offers to check current online listings. Physical-store inventory is shown only when a source supplies item- and size-specific store data.</p>
+        </div>}
+      </section>
+
       <section className="search-section" id="search">
         <div className="section-heading">
-          <div><div className="eyebrow dark-eyebrow">01 / PRODUCT SEARCH</div><h2>What are you hunting?</h2></div>
-          <div className="catalog-note"><span className="live-dot" /> Nike catalog + optional multi-retailer comparison</div>
+          <div><div className="eyebrow dark-eyebrow">02 / DIRECT NIKE SEARCH</div><h2>Search Nike directly.</h2></div>
+          <div className="catalog-note"><span className="live-dot" /> Nike is one catalog source among many</div>
         </div>
         <form className="search-form" onSubmit={onSubmit}>
-          <div className="search-input-wrap"><Search size={21} /><input value={query} onFocus={() => setSuggestionsOpen(true)} onChange={(event) => { setQuery(event.target.value); setSelectedProductUrl(""); setSuggestionsOpen(true); setMarketplaceOffers([]); setMarketplaceSources([]); setMarketplaceStatus("idle"); setMarketplaceError(""); setMarketplaceCachedAt(null); }} placeholder="Search a style, model, or style code..." aria-label="Search sneaker products" autoComplete="off" /><button type="button" className="clear-query" onClick={() => { setQuery(""); setSuggestions([]); setSuggestionsOpen(false); setSelectedProductUrl(""); setMarketplaceOffers([]); setMarketplaceSources([]); setMarketplaceStatus("idle"); setMarketplaceError(""); setMarketplaceCachedAt(null); }} aria-label="Clear search">{query ? <X size={17} /> : null}</button></div>
+          <div className="search-input-wrap"><Search size={21} /><input value={query} onFocus={() => setSuggestionsOpen(true)} onChange={(event) => { setQuery(event.target.value); setSelectedProductUrl(""); setSuggestionsOpen(true); setMarketplaceOffers([]); setMarketplaceSources([]); setMarketplaceStatus("idle"); setMarketplaceError(""); setMarketplaceCachedAt(null); }} placeholder="Search a style, model, or style code..." aria-label="Search Nike products" autoComplete="off" /><button type="button" className="clear-query" onClick={() => { setQuery(""); setSuggestions([]); setSuggestionsOpen(false); setSelectedProductUrl(""); setMarketplaceOffers([]); setMarketplaceSources([]); setMarketplaceStatus("idle"); setMarketplaceError(""); setMarketplaceCachedAt(null); }} aria-label="Clear search">{query ? <X size={17} /> : null}</button></div>
           <button className="search-button" type="submit" disabled={searchStatus === "loading"}>{searchStatus === "loading" ? <span className="spinner" /> : <Search size={17} />} <span>{searchStatus === "loading" ? "Searching" : "Search"}</span><ArrowRight size={17} /></button>
         </form>
         {suggestionsOpen && query.trim().length >= 3 && suggestions.length === 0 && <div className="suggestion-hint">No previously cached product matches. Press Search to query Nike; that result will be saved in Neon for future suggestions.</div>}
@@ -529,12 +608,12 @@ export default function Home() {
         </div>
         <div className="search-controls"><div className="suggested"><span className="control-label">QUICK SEARCH</span>{SUGGESTED_SEARCHES.map((term) => <button type="button" className="suggestion" key={term} onClick={() => { setQuery(term); void runSearch(term); }}>{term}</button>)}</div></div>
 
-        <section className="retailer-compare" aria-label="Compare sneaker retailers">
+        <section className="retailer-compare" id="retailer-comparison" aria-label="Compare sneaker retailers">
           <div className="retailer-compare-head">
-            <div><div className="eyebrow dark-eyebrow">02 / MULTI-RETAILER SEARCH</div><h3>Check other retailers</h3><p>Compare StockX, GOAT, Flight Club, Kicks Crew, Foot Locker and other merchants.</p></div>
+            <div><div className="eyebrow dark-eyebrow">03 / MULTI-RETAILER COMPARISON</div><h3>Check other retailers</h3><p>Compare StockX, GOAT, Flight Club, Kicks Crew, Foot Locker and other merchants.</p></div>
             <button className="compare-retailers-button" type="button" onClick={() => void compareRetailers()} disabled={marketplaceStatus === "loading" || query.trim().length < 2}>{marketplaceStatus === "loading" ? <span className="mini-spinner" /> : <ShoppingBag size={15} />} {marketplaceStatus === "loading" ? "Comparing" : "Compare retailers"}</button>
           </div>
-          <p className="retailer-compare-note">Only runs when you press Compare retailers. Uncached requests are limited to 5 per IP per day and protected by monthly free-tier budgets. Results are cached in Neon for 6 hours; PCKT catalog snapshots may be up to 24 hours old.</p>
+          <p className="retailer-compare-note">Runs only when requested. Product and brand/type searches are not capped per visitor; shared provider budgets prevent uncontrolled API spending. Results are cached in Neon for 6 hours, and marketplace catalog snapshots may be up to 24 hours old.</p>
           {marketplaceError && <div className="store-error">{marketplaceError}</div>}
           {marketplaceStatus === "loading" && <div className="store-results-loading">Checking marketplace catalogs and online retailer listings…</div>}
           {marketplaceStatus === "success" && <div className="retailer-results-wrap">
@@ -576,7 +655,7 @@ export default function Home() {
         {error && <div className="error-banner"><X size={16} /><div><strong>Search unavailable</strong><span>{error}</span>{providerConfigured === false && <a href="https://api.sh/" target="_blank" rel="noreferrer">Get a free product-data key <ExternalLink size={12} /></a>}</div></div>}
 
         {searchStatus === "idle" && tab === "search" && products.length === 0 && <div className="empty-state welcome-state">
-          <div className="empty-icon"><PackageSearch size={28} /></div><div className="eyebrow dark-eyebrow">YOUR NEXT FIND IS OUT THERE</div><h3>Search the Nike catalog.</h3><p>Try a model name, collection, or style code. Turn on Sale items only to focus on markdowns.</p>
+          <div className="empty-icon"><PackageSearch size={28} /></div><div className="eyebrow dark-eyebrow">YOUR NEXT FIND IS OUT THERE</div><h3>Search Nike directly.</h3><p>This is the direct Nike catalog lookup. For discontinued models and cross-brand discovery, start with the Product Discovery Catalog above.</p>
           {providerConfigured === false && <div className="setup-callout"><strong>One-time setup</strong><span>Add a free API.SH key as <code>API_SH_KEY</code> in Vercel to enable live product results. Check your API.SH dashboard for the current free allowance and remaining credits.</span><a href="https://api.sh/" target="_blank" rel="noreferrer">Create free product-data key <ArrowRight size={14} /></a></div>}
         </div>}
 
@@ -620,15 +699,15 @@ export default function Home() {
       <section className="how-it-works">
         <div className="eyebrow">02 / HOW IT WORKS</div><h2>From search to store run.</h2>
         <div className="steps-grid">
-          <div className="step-card"><span>01</span><Search size={20} /><h3>Search any style</h3><p>Use the model name, product name, or style code to find the Nike listing.</p></div>
-          <div className="step-card"><span>02</span><Tag size={20} /><h3>Compare the deal</h3><p>See current price, original price, markdown percentage, and online size data when provided.</p></div>
-          <div className="step-card"><span>03</span><MapPin size={20} /><h3>Verify pickup</h3><p>Open Nike's product page, choose the color and size, then review participating stores.</p></div>
+          <div className="step-card"><span>01</span><Search size={20} /><h3>Browse the catalog</h3><p>Discover model names across brands, including older and discontinued releases indexed by marketplaces.</p></div>
+          <div className="step-card"><span>02</span><Tag size={20} /><h3>Compare retailers</h3><p>Check StockX, GOAT, Flight Club, Kicks Crew and online merchant listings for current offers.</p></div>
+          <div className="step-card"><span>03</span><MapPin size={20} /><h3>Verify availability</h3><p>Check the seller's live size and checkout status. Physical-store inventory is shown only when verified by a source.</p></div>
         </div>
       </section>
 
       <footer className="footer">
         <div className="footer-brand">OUTLET<span>RADAR</span></div>
-        <div className="footer-copy">Independent shopping research tool. Not affiliated with or endorsed by Nike, Inc.</div>
+        <div className="footer-copy">Independent product-discovery and price-comparison platform. Not affiliated with or endorsed by the brands, retailers or marketplaces displayed.</div>
         <div className="footer-links"><a href="https://www.nike.com/help/a/store-pickup" target="_blank" rel="noreferrer">How Nike pickup works <ExternalLink size={11} /></a><a href="https://www.nike.com/retail/directory/united-states" target="_blank" rel="noreferrer">Nike store directory <ExternalLink size={11} /></a></div>
       </footer>
     </main>

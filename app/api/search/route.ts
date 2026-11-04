@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { normalizeNikeProduct, nikeApiRequest, productArray, providerMeta } from "@/lib/nike";
-import { allowSearch } from "@/lib/rate-limit";
 import { readCatalogMatches, readSearchCache, searchCacheKey, writeSearchCache } from "@/lib/search-cache";
 import { relevantToQuery } from "@/lib/search-match";
 
@@ -43,9 +42,6 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  if (!(await allowSearch(request))) {
-    return NextResponse.json({ error: "Daily live-search limit reached for this connection. Previously cached searches remain available." }, { status: 429 });
-  }
 
   try {
     // Fetch the broadest product set once. Sale, gender, category and size are all

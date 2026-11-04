@@ -138,21 +138,6 @@ async function reserveBudget(provider: "pckt" | "serpapi", units: number, ceilin
   `;
   return rows.length > 0;
 }
-async function reserveDailyLimit(request: NextRequest) {
-  const sql = getDb(); if (!sql) return false;
-  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || request.headers.get("x-real-ip") || "unknown";
-  const salt = process.env.RATE_LIMIT_SALT || process.env.PCKT_API_KEY || "outlet-radar";
-  const hash = createHash("sha256").update(`${salt}:${ip}`).digest("hex");
-  const rows = await sql`
-    INSERT INTO marketplace_search_rate_limits (ip_hash, usage_day, request_count)
-    VALUES (${hash}, CURRENT_DATE, 1)
-    ON CONFLICT (ip_hash, usage_day)
-    DO UPDATE SET request_count = marketplace_search_rate_limits.request_count + 1
-    WHERE marketplace_search_rate_limits.request_count < 5
-    RETURNING request_count
-  `;
-  return rows.length > 0;
-}
 async function readCache(key: string) {
   const sql = getDb(); if (!sql) return null;
   const rows = await sql`SELECT results_json, sources_json, cached_at FROM retailer_search_cache WHERE cache_key = ${key} AND expires_at > now() LIMIT 1` as Array<Record<string, unknown>>;
@@ -174,7 +159,7 @@ async function writeCache(key: string, query: string, offers: MarketplaceOffer[]
 export async function GET(request: NextRequest) {
   const query = request.nextUrl.searchParams.get("q")?.trim() ?? "";
   if (query.length < 2 || query.length > 100) return NextResponse.json({ error: "Enter a search between 2 and 100 characters." }, { status: 400 });
-  if (!getDb()) return NextResponse.json({ error: "Neon must be connected so monthly free-tier request limits can be enforced." }, { status: 503 });
+  if (!getDb()) return NextResponse.json({ error: "Neon must be connected so searches and shared provider budgets can be cached and enforced." }, { status: 503 });
   const cacheKey = createHash("sha256").update(norm(query)).digest("hex");
   const pcktKey = process.env.PCKT_API_KEY;
   const serpKey = process.env.SERPAPI_API_KEY;
@@ -183,8 +168,6 @@ export async function GET(request: NextRequest) {
     const newlyConfiguredSource = cached?.sources.some((source) => source.status === "not_configured" && ((source.key !== "shopping" && Boolean(pcktKey)) || (source.key === "shopping" && Boolean(serpKey))));
     if (cached && !newlyConfiguredSource) return NextResponse.json({ query, offers: cached.offers, sources: cached.sources, cached: true, cachedAt: cached.cachedAt, cacheHours: CACHE_HOURS });
   } catch { return NextResponse.json({ error: "The retailer cache table is missing. Run the latest db/schema.sql in Neon." }, { status: 503 }); }
-  if (!(await reserveDailyLimit(request))) return NextResponse.json({ error: "The limit is 5 uncached retailer comparisons per IP per day. Cached searches remain available." }, { status: 429 });
-
   const offers: MarketplaceOffer[] = []; const sources: SourceStatus[] = [];
   if (!pcktKey) {
     for (const source of pcktSources) sources.push({ key: source.key, name: source.name, status: "not_configured", results: 0, message: "Add PCKT_API_KEY in Vercel to enable this source." });

@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS nike_store_search_cache (
 ALTER TABLE watched_products ADD COLUMN IF NOT EXISTS product_gender VARCHAR(16) NOT NULL DEFAULT 'Unknown';
 ALTER TABLE watched_products ADD COLUMN IF NOT EXISTS product_category VARCHAR(24) NOT NULL DEFAULT 'Other';
 
--- Multi-retailer product lookup cache. Unfiltered query responses are reused for six hours.
+-- Shared multi-retailer comparison and product-catalog discovery cache. Comparison records use a six-hour TTL; brand/type catalog records use a twelve-hour TTL.
 CREATE TABLE IF NOT EXISTS retailer_search_cache (
   cache_key CHAR(64) PRIMARY KEY,
   query_text VARCHAR(160) NOT NULL,

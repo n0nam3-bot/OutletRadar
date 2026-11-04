@@ -68,6 +68,24 @@ export type MarketplaceOffer = {
   availabilityLabel: string;
   sourceUpdatedAt?: string;
 };
+
+export type CatalogBrowseCategory = "sneakers" | "apparel" | "accessories" | "all";
+export type CatalogListing = {
+  source: MarketplaceProvider;
+  retailer: string;
+  url: string;
+};
+export type CatalogBrowseProduct = {
+  id: string;
+  title: string;
+  brand: string;
+  category: CatalogBrowseCategory;
+  styleCode?: string;
+  imageUrl?: string;
+  sources: string[];
+  listings: CatalogListing[];
+};
+
 export type MarketplaceSourceStatus = {
   name: string;
   status: "success" | "not_configured" | "error" | "budget_reached";

@@ -1,21 +1,23 @@
-# Outlet Radar — Multi-Retailer Sneaker Finder v1.7
+# Outlet Radar — Multi-Brand Product Discovery v1.8
 
-A product-first sneaker finder built with Next.js, Vercel, and Neon Postgres. Search Nike public catalog listings, then optionally compare online listings across StockX, GOAT, Flight Club, Kicks Crew and Google Shopping merchants such as Foot Locker, Champs Sports and JD Sports. Find nearby sneaker retailer addresses by ZIP code. Search results and retailer comparisons are cached in Neon to conserve free API quotas.
+A multi-brand product discovery and price-comparison platform built with Next.js, Vercel, and Neon Postgres. Browse sneaker, apparel and accessory catalogs by brand, discover models that have not previously been searched in the app, compare online listings across StockX, GOAT, Flight Club, Kicks Crew and Google Shopping merchants such as Foot Locker, Champs Sports and JD Sports, and find nearby retailer addresses by ZIP code. Catalog and retailer searches are cached in Neon to conserve free API credits.
 
-> **Inventory limitation:** An online marketplace or retailer search result is a listing, not proof that a requested size can be purchased. v1.7 labels all StockX, GOAT, Flight Club, Kicks Crew and Google Shopping results as online listings with selected-size availability unverified. The ZIP locator returns nearby retailer addresses, not product-specific store inventory. It will not claim a store has the item unless a future retailer integration supplies an item-and-size-specific stock signal and store address.
+> **Catalog and inventory limitation:** The catalog is a discovery index, not a complete universal product master. StockX/GOAT/Flight Club/Kicks Crew and Google Shopping can reveal models not previously searched in Outlet Radar, including older/discontinued models when those providers index them. A catalog record is not proof of a current listing or size-level availability. Nearby mapped retailer locations do not prove an item is in stock at those stores.
 
-This is an independent tool and is not affiliated with or endorsed by Nike, Inc.
+Outlet Radar is an independent comparison platform and is not affiliated with or endorsed by any brand, retailer, or marketplace displayed.
 
 ## Features in this starter
 
-- **Multi-retailer comparison (on demand):** press Compare retailers to search cached StockX and GOAT catalogs, plus Flight Club and Kicks Crew through PCKT; optionally search Google Shopping merchants (including Foot Locker, Champs Sports, JD Sports and other retailers) through SerpApi.
+- **Product Discovery Catalog (primary experience):** select a product type (sneakers/shoes, apparel, accessories) and a brand (or all brands) to discover model names directly from connected marketplace and shopping indexes. Models do not need to have been searched in Outlet Radar before; discontinued items may appear when providers still index them.
+- **Cross-brand, multi-retailer comparison (on demand):** choose a catalog model and compare online offers from StockX, GOAT, Flight Club, Kicks Crew through PCKT and Google Shopping merchants including Foot Locker, Champs Sports, JD Sports and other returned sellers through SerpApi.
+- **Nike direct search (secondary):** retain a dedicated Nike.com product search for users who specifically want Nike's public catalog. This is not the master catalog and does not constrain discovery to currently active Nike products.
 - **Online versus store distinction:** marketplace cards identify the seller and show an Online label. A product listing is not treated as proof that a specific size is in stock. Nearby physical retailer locations are shown separately with name, address and straight-line distance; a location card never claims the item is stocked there.
-- **Free-tier protection:** retailer comparisons only run after a user presses the button, are cached in Neon for 6 hours, are limited to 5 uncached comparisons per IP per day, and enforce conservative monthly budget ceilings of 450 PCKT credits and 200 SerpApi searches. If Neon is not connected, third-party retailer requests are blocked so those shared ceilings cannot be bypassed.
+- **Free-tier protection:** catalog and retailer lookups are cached in Neon, with shared monthly safety ceilings of 450 PCKT credits and 200 SerpApi requests. There is no arbitrary daily search cap per visitor; once a provider's monthly safety budget is reached, fresh Neon-cached results remain available until their cache expires, and new uncached requests to that source pause.
 - **Nearby sneaker retailers:** the ZIP locator now searches mapped Nike, Foot Locker, Kids Foot Locker, Champs Sports, JD Sports, Finish Line, DICK'S Sporting Goods, Hibbett, Shoe Palace, Snipes, Flight Club, adidas, New Balance, ASICS and PUMA locations.
 
-- Search Nike's US public product listings by product name, model, or style code.
+- Search Nike's US public product listings by product name, model, or style code when the user deliberately chooses the secondary Nike search.
 - Sale-only, audience, category and size filters are applied locally after the shared base search has been fetched and cached. Changing these filters does not create another product-search API request.
-- Daily cap of 20 live provider-search misses per client IP (stored as a keyed hash when Neon is connected; process-local fallback otherwise). Cache hits do not consume a provider request or search-limit slot.
+- Direct Nike product searches are cached for 12 hours. Gender, category, size and sale filters remain local and do not create another product-search request.
 - Product image, style code, current price, original price, markdown percentage, audience and online size data when returned by the provider.
 - Relevance-filtered search: meaningful search terms must match the returned product title/description/style code, reducing unrelated Nike fallback listings.
 - Product suggestions from the Neon catalogue as the user types. Typeahead reads Neon only and does not make paid API requests; a new product appears in suggestions after its first successful search is cached.
@@ -25,7 +27,7 @@ This is an independent tool and is not affiliated with or endorsed by Nike, Inc.
 - Persistent Neon caching: the unfiltered base result for an identical model query is reused for 12 hours regardless of audience, size, category or sale filters; product details and online size data are reused for one hour; nearby store locations are reused for 24 hours. The catalogue uses a version marker so partially filtered records created by v1.1 are not mistaken for complete v1.3 catalogues.
 - Save products to a browser watchlist; Neon persistence is enabled when `DATABASE_URL` is configured and `db/schema.sql` has been run.
 - Daily price history refresh for up to 10 saved product links per day through Vercel Cron (requires `API_SH_KEY`, `DATABASE_URL`, and `CRON_SECRET`).
-- No user account or personal information is required. The watchlist uses a random browser-generated visitor ID; clearing browser storage loses the local watchlist unless the database is configured and that visitor ID is retained. Hashed IP limits are used for daily retailer comparisons; raw IP addresses are not stored by the application.
+- No user account or personal information is required. The watchlist uses a random browser-generated visitor ID; clearing browser storage loses the local watchlist unless the database is configured and that visitor ID is retained. Legacy hashed-IP limit tables remain in the schema for compatibility but no daily per-visitor search cap is enforced by v1.8.
 
 ## Version 1.2 changes
 
@@ -51,9 +53,9 @@ This is an independent tool and is not affiliated with or endorsed by Nike, Inc.
 - Next.js 15 / React 19 / TypeScript
 - Vercel Hobby hosting and daily Cron
 - Neon PostgreSQL
-- API.SH Nike product-data endpoint
-- PCKT marketplace catalog API (optional)
-- SerpApi Google Shopping API (optional)
+- PCKT marketplace catalog APIs (StockX, GOAT, Flight Club, Kicks Crew)
+- SerpApi Google Shopping API for broad retailer discovery
+- API.SH Nike product-data endpoint for optional direct Nike search
 
 ## Setup
 
@@ -63,11 +65,11 @@ This is an independent tool and is not affiliated with or endorsed by Nike, Inc.
 2. Create an API key.
 3. Add it to Vercel as `API_SH_KEY` (or copy it to `.env.local` for local development).
 
-API.SH currently lists one credit per Nike search and product-detail call. Free-credit allowances and pricing are subject to provider changes; check your current API.SH dashboard for the exact quota. The app limits its daily background refresh to 10 product calls. Neon caching avoids repeated model searches and detail lookups. Entering a size filter does not make a provider call. The shopper requests size details per product, and each successful detail response is cached for one hour. This limits provider calls and makes the check cost explicit.
+API.SH is used only for the optional direct Nike.com search and Nike size-detail checks. It is not the source of the main product discovery catalog. Free-credit allowances and pricing are subject to provider changes; check your API.SH dashboard for the exact quota. The app's daily background refresh is limited to 10 saved-product checks. Neon caching avoids repeated model searches and detail lookups. Entering a size filter does not make a provider call. The shopper requests size details per product, and each successful detail response is cached for one hour.
 
 ### 2. Add optional multi-retailer providers
 
-These providers are only called when a user explicitly presses **Compare retailers**. The app does not call them while typing or as part of the Nike search.
+These providers are called only when a user explicitly presses **Browse catalog** or **Compare retailers**. The app does not call them while typing or silently in the background.
 
 **PCKT — StockX, GOAT, Flight Club and Kicks Crew**
 
@@ -75,7 +77,7 @@ These providers are only called when a user explicitly presses **Compare retaile
 2. Open the API docs / account area and create or copy your API key.
 3. Add the key to Vercel as `PCKT_API_KEY` (Secret, server-side only).
 
-PCKT currently advertises 500 free credits per month after its initial signup credits. The four searches in one uncached comparison have documented costs of 0.4 (StockX cached search), 0.3 (GOAT cached search), 1 (Flight Club search) and 0.5 (Kicks Crew search), or 2.2 credits in total. PCKT's Free plan rate limit is 1 request per second. A shared Neon request gate enforces that pacing across concurrent Vercel instances. The app reserves at most 450 PCKT credits per month, leaving a 50-credit buffer. Cached PCKT catalog data can be up to 24 hours old. These quotas and provider terms can change; check your PCKT dashboard.
+PCKT currently advertises 500 free credits per month after its initial signup credits. An uncached sneaker catalog browse or retailer comparison that calls all four sources has documented costs of 0.4 (StockX cached search), 0.3 (GOAT cached search), 1 (Flight Club search) and 0.5 (Kicks Crew search), or up to 2.2 credits in total. Apparel/accessory catalog browsing currently queries StockX and GOAT (0.7 credits combined). PCKT's Free plan rate limit is 1 request per second. A shared Neon request gate enforces that pacing across concurrent Vercel instances. The app reserves at most 450 PCKT credits per month, leaving a 50-credit buffer. Cached PCKT catalog data can be up to 24 hours old. These quotas and provider terms can change; check your PCKT dashboard.
 
 **SerpApi — Google Shopping merchant listings, including Foot Locker when returned**
 
@@ -94,7 +96,7 @@ Both keys are optional and do not replace `API_SH_KEY`. Do not give either key a
 3. Add it to Vercel as `DATABASE_URL`.
 4. Open Neon's SQL Editor and run the contents of [`db/schema.sql`](./db/schema.sql) if this is a new database or the schema has not already been applied.
 
-The database contains watchlists, price history, hashed search limits, Nike product caches, retailer search caches, retailer API monthly-budget counters, retailer daily rate limits, a shared PCKT pacing gate, a cached product catalogue for typeahead, and nearby retailer-location caches. Run the **entire current** `db/schema.sql` in Neon's SQL Editor. It uses `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so it can be run again on an existing project without deleting your existing watchlist or history. If Neon is not configured, live product search still works, but persistent search caching and catalog suggestions are unavailable.
+The database contains watchlists, price history, legacy hashed search-limit records, Nike direct-search caches, retailer/catalog discovery caches, retailer API monthly-budget counters, a shared PCKT pacing gate, a cached Nike typeahead catalogue, and nearby retailer-location caches. Run the **entire current** `db/schema.sql` in Neon's SQL Editor. It uses `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so it can be run again on an existing project without deleting your existing watchlist or history. If Neon is not configured, live product search still works, but persistent search caching and catalog suggestions are unavailable.
 
 ### 4. Deploy to Vercel
 
@@ -113,9 +115,9 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-### Upgrade from v1.6
+### Upgrade from v1.7
 
-Replace the repository contents with this v1.7 project and redeploy. Before using multi-retailer comparison, run [`db/migrations/001_multi_retailer.sql`](./db/migrations/001_multi_retailer.sql) in Neon's SQL Editor, or run the entire current [`db/schema.sql`](./db/schema.sql). The migration only creates the new retailer cache, budget, rate-limit, and request-pacing tables; it does not delete existing watchlists, Nike product cache, or price history. Add `PCKT_API_KEY` and/or `SERPAPI_API_KEY` in Vercel to turn on those optional sources.
+Replace the repository contents with this v1.8 project and deploy. If you already ran the v1.7 multi-retailer migration, no additional SQL migration is required: v1.8 reuses `retailer_search_cache` for brand/type catalog discovery. If the retailer tables are not installed, run [`db/migrations/001_multi_retailer.sql`](./db/migrations/001_multi_retailer.sql) or the complete current [`db/schema.sql`](./db/schema.sql) in Neon. Add `PCKT_API_KEY` to enable StockX, GOAT, Flight Club and Kicks Crew catalog discovery, and `SERPAPI_API_KEY` to add Google Shopping merchant results such as Foot Locker when returned. `API_SH_KEY` is only needed for the optional direct Nike search and Nike size details.
 
 ## Environment variables
 
@@ -123,11 +125,11 @@ Replace the repository contents with this v1.7 project and redeploy. Before usin
 |---|---|---|
 | `API_SH_KEY` | Live Nike product search | API.SH key; keep server-side only |
 | `DATABASE_URL` | Watchlist, history, product/search/store caches | Neon pooled PostgreSQL connection string |
-| `PCKT_API_KEY` | Optional StockX, GOAT, Flight Club and Kicks Crew comparison | PCKT bearer token; never expose client-side |
+| `PCKT_API_KEY` | Marketplace catalog discovery and StockX, GOAT, Flight Club and Kicks Crew comparison | PCKT bearer token; never expose client-side |
 | `SERPAPI_API_KEY` | Optional Google Shopping retailer listings | SerpApi key; never expose client-side |
 | `CRON_SECRET` | Daily price-check job | Random secret, at least 32 characters recommended |
 | `MAX_DAILY_PRICE_CHECKS` | Optional | Default 10; hard-capped at 10 by this starter |
-| `RATE_LIMIT_SALT` | Optional | Salt for hashed-IP search limits; defaults to `API_SH_KEY` |
+| `RATE_LIMIT_SALT` | Legacy optional setting | Retained for compatibility; arbitrary daily visitor search caps are not enforced by v1.8 |
 
 Do not use a `NEXT_PUBLIC_` prefix for any of these secrets.
 
@@ -145,7 +147,7 @@ The app intentionally does **not** translate online shipping size status into st
 
 Vercel Hobby supports Cron Jobs but schedules are limited to once per day, and execution can happen within the configured UTC hour rather than at an exact minute. This starter schedules one daily refresh at 13:17 UTC. The endpoint is protected by `CRON_SECRET` and checks at most 10 watchlist rows per run. Refreshes create one price-history record per product per calendar day. The feature records history only; it does not send email, text, or push notifications.
 
-If you add many users, watchlist rows, or manual searches, monitor the API.SH monthly credit balance and Neon/Vercel usage. Free tiers have quotas and are not an unlimited commercial hosting arrangement.
+If you add many users, watchlist rows, or manual searches, monitor the PCKT, SerpApi and API.SH usage dashboards as well as Neon/Vercel usage. Visitor searches are not arbitrarily capped, but provider requests still pause when the shared monthly safety budgets are reached. Free tiers are not an unlimited commercial hosting arrangement.
 
 ## Important source links
 
@@ -223,7 +225,7 @@ Starter code is provided for personal experimentation. Product data is supplied 
 - Added on-demand search across StockX, GOAT, Flight Club and Kicks Crew through PCKT's free-plan APIs.
 - Added optional Google Shopping merchant search through SerpApi for Foot Locker and other merchants that Google returns for the product query.
 - Added Neon caching for complete retailer-comparison results (6-hour TTL). Filter controls and typing do not trigger retailer provider calls.
-- Added conservative shared monthly budget reservations: 450 PCKT credits and 200 SerpApi searches, plus 5 uncached comparisons per IP per day. Marketplace calls are disabled when Neon is not available so the monthly ceilings remain enforceable.
+- Added conservative shared monthly budget reservations: 450 PCKT credits and 200 SerpApi searches, and arbitrary daily per-IP visitor search caps were removed. Marketplace calls are disabled when Neon is not available so the shared monthly ceilings remain enforceable.
 - Expanded ZIP location search to mapped major sneaker retailers. Physical locations are clearly separated from product inventory and never labeled as in-stock without item-specific evidence.
 - All online marketplace/search-engine offers are labeled as unverified for the selected size unless the source provides an explicit size-specific availability field.
 
@@ -231,3 +233,14 @@ Starter code is provided for personal experimentation. Product data is supplied 
 ## v1.7.1 — Impact website verification
 
 This release adds the Impact website ownership verification meta tag to `app/layout.tsx`. After deploying, return to Impact and click **Add Website** to complete verification. No database migration or new environment variables are required.
+
+
+## Version 1.8 — Multi-brand catalog discovery
+
+- Added the Product Discovery Catalog as the primary experience. Users select a product type (sneakers/shoes, apparel, accessories) and a brand (or all brands) to discover model names without first searching for each model manually.
+- Added catalog discovery through PCKT cached StockX and GOAT search, plus Flight Club and Kicks Crew footwear search; Google Shopping adds broader online merchant results when `SERPAPI_API_KEY` is configured.
+- Catalog records from different sources are grouped by style/SKU where possible and can be sent to the existing cross-retailer comparison flow with one action.
+- Discovery responses reuse `retailer_search_cache` in Neon for 12 hours. No new SQL migration is required for v1.8 if the v1.7 multi-retailer schema has already been applied.
+- Removed the hard daily per-IP caps from direct Nike searches and multi-retailer comparisons. Provider-level monthly budgets and Neon caching remain in place; when a provider budget is exhausted, existing cached records remain available and uncached requests from that source pause.
+- Updated branding and page copy so Nike is a secondary direct-search source rather than the product catalog's primary identity.
+- Catalog coverage is not exhaustive. Discontinued and older models may appear when indexed by the connected providers; no catalog result guarantees a currently purchasable offer, size, or physical-store stock.

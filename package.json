@@ -1,6 +1,6 @@
 {
-  "name": "nike-clearance-finder",
-  "version": "1.6.0",
+  "name": "outlet-radar",
+  "version": "1.8.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
