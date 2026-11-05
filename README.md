@@ -16,7 +16,7 @@ Built with Next.js 15, Vercel and Neon Postgres, and designed to keep working on
 - **Exact-product comparison.** **Compare offers** expands a card to show that model's direct retailer listings: seller title, price, size signals and product link. Similar-but-different models are excluded.
 - **Never an empty page.** If a source is out of free lookups, paused or failing, saved results are shown with a clear notice and the search is queued for an automatic refresh.
 - **Watchlist.** Save products. The daily price-history job currently tracks Nike URLs only; other saved links are kept but not refreshed.
-- **Owner dashboard.** `/admin/providers` shows provider budgets, health, the refresh queue and catalog counts.
+- **Owner dashboard.** `/admin/providers` shows provider budgets, health, the refresh queue, catalog counts and which retailers have actually appeared in results.
 
 ## How it works
 
@@ -181,7 +181,7 @@ vercel.json                     Cron schedule
 - [Free-tier operations](./docs/free-tier-operations.md): limits, fallbacks, tuning, warm-up, dashboard
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v2.3.0](./changelog/v2.3.0.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v2.3.1](./changelog/v2.3.1.md))
 
 ## Data and license
 

@@ -28,6 +28,7 @@ type Diagnostics = {
   checkedAt: string;
   budgets: Budget[];
   providers: Provider[];
+  retailerCoverage?: { targets: Array<{ name: string; via: string; seen: boolean; offers: number; products: number; lastSeenAt: string | null; sellerNames: string[] }>; other: Array<{ retailer: string; source: string; offers: number }> };
   refreshQueue?: { available: boolean; pending: number; oldestPendingAt: string | null; completedLast7Days: number };
   catalog: { canonicalProducts: number; retailerOffers: number; sizeVariants: number; verifiedSizeSignals: number; availableSizeSignals: number; unknownSizeLabels: number };
   notes?: string[];
@@ -142,6 +143,16 @@ export default function ProviderAdminPage() {
             })}
           </div>
 
+          {data.retailerCoverage && <>
+            <div className="admin-section-heading"><h2>Retailer coverage</h2><span>Sellers actually stored from real searches</span></div>
+            <div className="admin-coverage-list">
+              {data.retailerCoverage.targets.map((target) => <div className={`admin-coverage-row ${target.seen ? "is-seen" : "is-missing"}`} key={target.name}>
+                <strong>{target.seen ? "✓" : "–"} {target.name}</strong>
+                <span>{target.seen ? `${target.offers.toLocaleString()} offers · ${target.products.toLocaleString()} products · last ${dateLabel(target.lastSeenAt)}` : `Not seen yet (expected via ${target.via})`}</span>
+              </div>)}
+            </div>
+            {data.retailerCoverage.other.length > 0 && <p className="admin-coverage-other">Other sellers seen: {data.retailerCoverage.other.map((row) => `${row.retailer} (${row.offers})`).join(", ")}</p>}
+          </>}
           <div className="admin-section-heading"><h2>Provider connections</h2><span>Errors trigger a temporary cooldown after repeated failures</span></div>
           <div className="admin-provider-list">
             {data.providers.length === 0 && <div className="admin-empty">No provider attempts have been recorded yet. A provider appears here after its first request.</div>}

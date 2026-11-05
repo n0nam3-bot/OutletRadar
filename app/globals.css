@@ -340,3 +340,12 @@
 .catalog-incomplete-notice{display:flex;flex-direction:column;gap:4px;margin:0 0 12px;padding:10px 12px;border:1px solid #e8d9a8;border-radius:10px;background:#fbf6e3;color:#4a4220}
 .catalog-incomplete-notice strong{font:600 13px var(--display)}
 .catalog-incomplete-notice span{font:400 12px/1.5 var(--body)}
+
+/* v2.3.1: admin retailer coverage report */
+.admin-coverage-list{display:grid;gap:6px;margin-bottom:10px}
+.admin-coverage-row{display:flex;justify-content:space-between;gap:12px;align-items:baseline;background:#fff;border:1px solid #e5eae2;padding:10px 12px}
+.admin-coverage-row strong{font:600 12px var(--display)}
+.admin-coverage-row span{font:9px var(--mono);color:#7b8678;text-align:right}
+.admin-coverage-row.is-missing{background:#fbfbf8}
+.admin-coverage-row.is-missing strong{color:#8a9186}
+.admin-coverage-other{font:10px/1.6 var(--mono);color:#7b8678;margin:0 0 18px}

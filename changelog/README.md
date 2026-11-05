@@ -4,6 +4,7 @@ Release notes for each Outlet Radar version, newest first. Upgrade instructions 
 
 | Version | Summary |
 |---|---|
+| [v2.3.1](./v2.3.1.md) | Admin retailer coverage report |
 | [v2.3.0](./v2.3.0.md) | Never-empty search, no caching of incomplete results, refresh queue and daily warm-up, configurable budgets |
 | [v2.2.0](./v2.2.0.md) | Shared provider snapshots, daily + monthly budget protection, size persistence fixes |
 | [v2.1.0](./v2.1.0.md) | Normalized catalog/offer/size tables, provider health, admin dashboard, database-first search |
