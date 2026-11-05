@@ -1,6 +1,6 @@
-name: Apply uploaded project ZIP
+name: Validate and apply uploaded Outlet Radar ZIP
 
-on:
+"on":
   push:
     paths:
       - '*.zip'
@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  apply-update:
+  validate-and-apply:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -22,141 +22,133 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Safely extract and install the uploaded ZIP
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Safely extract uploaded project ZIP
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import json
+          import os
           import shutil
           import stat
-          import subprocess
           import tempfile
           import zipfile
           from pathlib import Path, PurePosixPath
 
           repo = Path.cwd()
           archives = sorted(p for p in repo.glob("*.zip") if p.is_file())
-
-          if not archives:
-              raise SystemExit(
-                  "No ZIP found in the repository root. Upload one project ZIP "
-                  "to the root of the repository, commit it, and rerun this workflow."
-              )
           if len(archives) != 1:
-              names = ", ".join(p.name for p in archives)
-              raise SystemExit(
-                  f"Expected exactly one ZIP in the repository root; found: {names}. "
-                  "Remove the extras and commit again."
-              )
+              names = ", ".join(p.name for p in archives) or "none"
+              raise SystemExit(f"Expected exactly one ZIP at the repository root; found: {names}.")
 
           archive = archives[0]
-          ignored_parts = {
-              "__MACOSX", ".git", ".github", "node_modules", ".next",
-              ".vercel", "coverage", "dist", "build", "out", ".turbo"
-          }
+          ignored_parts = {"__MACOSX", ".git", ".github", "node_modules", ".next", ".vercel", "coverage", "dist", "build", "out", ".turbo"}
 
           def safe_parts(name: str):
-              normalized = name.replace("\\", "/")
-              path = PurePosixPath(normalized)
-              if path.is_absolute() or not path.parts or any(
-                  part in ("", ".", "..") for part in path.parts
-              ):
+              path = PurePosixPath(name.replace("\\", "/"))
+              if path.is_absolute() or not path.parts or any(part in ("", ".", "..") for part in path.parts):
                   raise ValueError(f"Unsafe ZIP path: {name}")
               if ":" in path.parts[0]:
                   raise ValueError(f"Unsafe ZIP path: {name}")
               return path.parts
 
-          with tempfile.TemporaryDirectory(prefix="outlet-radar-update-") as temp_name:
-              stage = Path(temp_name) / "project"
-              stage.mkdir(parents=True)
+          stage = Path(os.environ["RUNNER_TEMP"]) / "outlet-radar-staged-project"
+          if stage.exists():
+              shutil.rmtree(stage)
+          stage.mkdir(parents=True)
 
-              with zipfile.ZipFile(archive) as zf:
-                  entries = []
-                  for info in zf.infolist():
-                      if info.is_dir():
-                          continue
-                      parts = safe_parts(info.filename)
-                      if any(part in ignored_parts for part in parts):
-                          continue
-                      base = parts[-1]
-                      if base == ".env" or (
-                          base.startswith(".env.")
-                          and base not in {".env.example", ".env.template"}
-                          and not base.endswith(".example")
-                          and not base.endswith(".template")
-                      ):
-                          continue
-                      if base.lower().endswith(".zip") or base == ".DS_Store":
-                          continue
-                      mode = (info.external_attr >> 16) & 0xFFFF
-                      if stat.S_ISLNK(mode):
-                          raise ValueError(f"Symbolic links are not allowed in ZIPs: {info.filename}")
-                      entries.append((info, parts))
+          with zipfile.ZipFile(archive) as zf:
+              entries = []
+              for info in zf.infolist():
+                  if info.is_dir():
+                      continue
+                  parts = safe_parts(info.filename)
+                  if any(part in ignored_parts for part in parts):
+                      continue
+                  base = parts[-1]
+                  if base == ".env" or (base.startswith(".env.") and base not in {".env.example", ".env.template"} and not base.endswith((".example", ".template"))):
+                      continue
+                  if base.lower().endswith(".zip") or base == ".DS_Store":
+                      continue
+                  mode = (info.external_attr >> 16) & 0xFFFF
+                  if stat.S_ISLNK(mode):
+                      raise ValueError(f"Symbolic links are not allowed: {info.filename}")
+                  entries.append((info, parts))
+              if not entries:
+                  raise SystemExit("The uploaded ZIP contains no usable project files.")
 
-                  if not entries:
-                      raise SystemExit("The ZIP contains no usable project files.")
+              top_levels = {parts[0] for _, parts in entries}
+              strip_wrapper = len(top_levels) == 1 and all(len(parts) > 1 for _, parts in entries)
+              for info, parts in entries:
+                  relative = parts[1:] if strip_wrapper else parts
+                  if not relative:
+                      continue
+                  destination = stage.joinpath(*relative)
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  with zf.open(info) as source, destination.open("wb") as target:
+                      shutil.copyfileobj(source, target)
 
-                  # ChatGPT project ZIPs have a single wrapper folder, such as
-                  # nike-clearance-finder/. Strip it so package.json lands at repo root.
-                  top_levels = {parts[0] for _, parts in entries}
-                  strip_wrapper = len(top_levels) == 1 and all(len(parts) > 1 for _, parts in entries)
+          package_file = stage / "package.json"
+          if not package_file.is_file():
+              raise SystemExit("package.json was not found at the extracted project root.")
+          package = json.loads(package_file.read_text(encoding="utf-8"))
+          deps = dict(package.get("dependencies") or {})
+          deps.update(package.get("devDependencies") or {})
+          if "next" not in deps or "build" not in (package.get("scripts") or {}):
+              raise SystemExit("The ZIP does not appear to be a buildable Next.js project.")
 
-                  for info, parts in entries:
-                      relative = parts[1:] if strip_wrapper else parts
-                      if not relative:
-                          continue
-                      destination = stage.joinpath(*relative)
-                      destination.parent.mkdir(parents=True, exist_ok=True)
-                      with zf.open(info, "r") as source, destination.open("wb") as target:
-                          shutil.copyfileobj(source, target)
-
-              package_file = stage / "package.json"
-              if not package_file.is_file():
-                  raise SystemExit(
-                      "Could not find package.json at the ZIP's project root. "
-                      "The archive may not be the Outlet Radar project ZIP."
-                  )
-              package = json.loads(package_file.read_text(encoding="utf-8"))
-              dependencies = {}
-              dependencies.update(package.get("dependencies") or {})
-              dependencies.update(package.get("devDependencies") or {})
-              if "next" not in dependencies:
-                  raise SystemExit("The ZIP's package.json does not identify a Next.js project.")
-
-              # Mirror the ZIP into the repository, removing stale app files while
-              # preserving GitHub workflows, uploaded ZIPs, local secrets, and SQL migrations.
-              rsync_excludes = [
-                  "--exclude=/.git/",
-                  "--exclude=/.github/",
-                  "--exclude=/updates/",
-                  "--exclude=/*.zip",
-                  "--exclude=/node_modules/",
-                  "--exclude=/.next/",
-                  "--exclude=/.vercel/",
-                  "--exclude=/coverage/",
-                  "--exclude=/dist/",
-                  "--exclude=/build/",
-                  "--exclude=/out/",
-                  "--exclude=/.env",
-                  "--exclude=/.env.local",
-                  "--exclude=/.env.production",
-                  "--exclude=/.env.development",
-                  "--exclude=/.env.test",
-                  "--exclude=/.env.*.local",
-                  "--exclude=/*-migration*.sql",
-              ]
-              subprocess.run(
-                  ["rsync", "-a", "--delete", *rsync_excludes, f"{stage}/", f"{repo}/"],
-                  check=True,
-              )
-
-          # Remove the uploaded archive so it does not remain in the source repository.
-          archive.unlink()
-          print(f"Successfully applied {archive.name} to the repository root.")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"OUTLET_RADAR_STAGE={stage}\n")
+              env.write(f"OUTLET_RADAR_ARCHIVE={archive.name}\n")
+          print(f"Extracted {archive.name} to {stage}")
           PY
 
-      - name: Commit and push the extracted project
+      - name: Install dependencies in the staged project
+        working-directory: ${{ runner.temp }}/outlet-radar-staged-project
+        run: npm install --no-package-lock --no-audit --no-fund
+
+      - name: Run production build before modifying repository files
+        working-directory: ${{ runner.temp }}/outlet-radar-staged-project
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+        run: npm run build
+
+      - name: Apply validated project files
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="${OUTLET_RADAR_STAGE}"
+          archive="${OUTLET_RADAR_ARCHIVE}"
+          test -f "${stage}/package.json"
+          rsync -a --delete \
+            --exclude='/.git/' \
+            --exclude='/.github/' \
+            --exclude='/updates/' \
+            --exclude='/*.zip' \
+            --exclude='/node_modules/' \
+            --exclude='/.next/' \
+            --exclude='/.vercel/' \
+            --exclude='/coverage/' \
+            --exclude='/dist/' \
+            --exclude='/build/' \
+            --exclude='/out/' \
+            --exclude='/.env' \
+            --exclude='/.env.local' \
+            --exclude='/.env.production' \
+            --exclude='/.env.development' \
+            --exclude='/.env.test' \
+            --exclude='/.env.*.local' \
+            --exclude='/*-migration*.sql' \
+            "${stage}/" "${GITHUB_WORKSPACE}/"
+          rm -f -- "${GITHUB_WORKSPACE}/${archive}"
+
+      - name: Commit validated source update
         shell: bash
         run: |
           set -euo pipefail
@@ -167,5 +159,5 @@ jobs:
             echo "No repository changes to commit."
             exit 0
           fi
-          git commit -m "chore: apply uploaded project ZIP"
+          git commit -m "chore: apply validated Outlet Radar ZIP"
           git push origin "HEAD:${GITHUB_REF_NAME}"
