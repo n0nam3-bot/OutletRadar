@@ -3,15 +3,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { filterOfferSizeLabels, inferListingAudience, isOfferAllowedForAudience } from "@/lib/audience";
 import { persistCatalogSnapshot } from "@/lib/catalog-store";
-import { getProviderCooldown, recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 import type { CatalogBrowseProduct, CatalogListing, MarketplaceOffer, MarketplaceProvider, MarketplaceSourceStatus } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const CACHE_HOURS = 6;
-const PCKT_MONTHLY_BUDGET = 450;
-const SERPAPI_MONTHLY_BUDGET = 200;
 const sources = [
   { key: "stockx", name: "StockX", path: "/v1/catalog/stockx/search", credits: 0.4, params: (q: string) => ({ query: q, page: "1", market: "US" }) },
   { key: "goat", name: "GOAT", path: "/v1/catalog/goat/search", credits: 0.3, params: (q: string) => ({ query: q, page: "0" }) },
@@ -290,37 +287,7 @@ function seedListingOffer(listing: CatalogListing, target: ExactTarget, index: n
     releaseYear: listing.releaseYear,
   };
 }
-async function fetchJson(url: URL, headers?: HeadersInit) {
-  const response = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(9_000) });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const data = obj(payload);
-    throw new Error(str(data?.message, data?.error, data?.detail) || `HTTP ${response.status}`);
-  }
-  return payload;
-}
-async function reserveBudget(provider: "pckt" | "serpapi", units: number, ceiling: number): Promise<boolean> {
-  const sql = getDb(); if (!sql) return false;
-  const rows = await sql`
-    INSERT INTO retailer_api_usage (provider, usage_month, units_reserved)
-    VALUES (${provider}, date_trunc('month', now())::date, ${units})
-    ON CONFLICT (provider, usage_month)
-    DO UPDATE SET units_reserved = retailer_api_usage.units_reserved + EXCLUDED.units_reserved
-    WHERE retailer_api_usage.units_reserved + EXCLUDED.units_reserved <= ${ceiling}
-    RETURNING units_reserved
-  `;
-  return rows.length > 0;
-}
-async function waitForPcktSlot() {
-  const sql = getDb(); if (!sql) throw new Error("Neon is required to enforce PCKT's shared rate limit.");
-  const rows = await sql`
-    INSERT INTO retailer_provider_request_gate (provider, next_allowed_at) VALUES ('pckt', now())
-    ON CONFLICT (provider) DO UPDATE SET next_allowed_at = GREATEST(retailer_provider_request_gate.next_allowed_at, now()) + interval '1100 milliseconds'
-    RETURNING next_allowed_at
-  ` as Array<{ next_allowed_at: string | Date }>;
-  const delay = rows[0]?.next_allowed_at ? new Date(rows[0].next_allowed_at).getTime() - Date.now() : 0;
-  if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
-}
+
 async function readCache(key: string) {
   const sql = getDb(); if (!sql) return null;
   const rows = await sql`SELECT results_json, sources_json, cached_at FROM retailer_search_cache WHERE cache_key = ${key} AND expires_at > now() LIMIT 1` as Array<Record<string, unknown>>;
@@ -377,7 +344,7 @@ export async function POST(request: NextRequest) {
   };
   const query = buildExactQuery(target);
   const listingSignature = target.listings.map((listing) => `${listing.source}:${listing.url.toLowerCase()}`).sort().join("|");
-  const cacheIdentity = ["exact-offers:v7", target.brand, target.title, target.styleCode || "", target.color || "", target.releaseYear || "", target.gender || "", target.requestedAudience, listingSignature].map(String).join(":");
+  const cacheIdentity = ["exact-offers:v9", target.brand, target.title, target.styleCode || "", target.color || "", target.releaseYear || "", target.gender || "", target.requestedAudience, listingSignature].map(String).join(":");
   const cacheKey = createHash("sha256").update(norm(cacheIdentity)).digest("hex");
   try {
     const cached = await readCache(cacheKey);
@@ -392,70 +359,36 @@ export async function POST(request: NextRequest) {
         releaseYear: target.releaseYear,
       };
       try { await persistCatalogSnapshot([cachedProduct], cached.offers); } catch { /* backfill is best-effort */ }
-      return NextResponse.json({ productId: target.id, offers: cached.offers, sources: cached.sources, cached: true, cachedAt: cached.cachedAt, cacheHours: CACHE_HOURS });
+      return NextResponse.json({ productId: target.id, offers: cached.offers, sources: cached.sources, cached: true, cachedAt: cached.cachedAt, cacheHours: CACHE_HOURS, note: "Comparison reuses the selected product’s grouped retailer listings; opening this panel does not trigger broad catalog searches." });
     }
   } catch {
     return NextResponse.json({ error: "Could not read the exact-product comparison cache. Confirm retailer_search_cache exists in the Neon branch used by DATABASE_URL." }, { status: 503 });
   }
 
-  const offers: MarketplaceOffer[] = target.listings.map((listing, index) => seedListingOffer(listing, target, index)).filter((offer): offer is MarketplaceOffer => !!offer);
-  const statuses: SourceStatus[] = [];
-  const pcktKey = process.env.PCKT_API_KEY;
-  if (!pcktKey) {
-    for (const source of sources) statuses.push({ key: source.key, name: source.name, status: "not_configured", results: 0, message: "PCKT_API_KEY is not configured. Existing grouped retailer listings are still displayed." });
-  } else if (!persistenceAvailable) {
-    for (const source of sources) statuses.push({ key: source.key, name: source.name, status: "error", results: 0, message: "Neon is temporarily unavailable, so live provider pulls are paused to avoid untracked API usage. Existing catalog listings remain available." });
-  } else {
-    for (const source of sources) {
-      const cooldown = await getProviderCooldown(source.key);
-      if (cooldown.paused) {
-        statuses.push({ key: source.key, name: source.name, status: "cooldown", results: 0, message: `Temporarily paused after repeated provider errors until ${cooldown.disabledUntil}. Existing offers remain visible.` });
-        continue;
-      }
-      if (!(await reserveBudget("pckt", source.credits, PCKT_MONTHLY_BUDGET))) {
-        statuses.push({ key: source.key, name: source.name, status: "budget_reached", results: 0, message: "Monthly PCKT safety budget reached; grouped catalog listings remain available." });
-        continue;
-      }
-      const providerStartedAt = Date.now();
-      try {
-        await waitForPcktSlot();
-        const url = new URL(`https://api.pckt.sh${source.path}`);
-        Object.entries(source.params(query)).forEach(([key, value]) => url.searchParams.set(key, value));
-        const payload = await fetchJson(url, { Authorization: `Bearer ${pcktKey}`, Accept: "application/json" });
-        await recordProviderSuccess(source.key, Date.now() - providerStartedAt);
-        const found = records(payload).map((item) => normalizePckt(source.key, item, target)).filter((offer): offer is MarketplaceOffer => !!offer);
-        offers.push(...found);
-        statuses.push({ key: source.key, name: source.name, status: "success", results: found.length, message: found.length ? `${found.length} exact-model listing(s) passed the selected product match checks.` : "No listing passed the exact model, style and variant checks." });
-      } catch (error) {
-        await recordProviderFailure(source.key, Date.now() - providerStartedAt, error);
-        statuses.push({ key: source.key, name: source.name, status: "error", results: 0, message: error instanceof Error ? error.message : "Provider request failed." });
-      }
-    }
-  }
+  // Compare offers must not trigger another broad provider search. The catalog
+  // request has already discovered and grouped these exact retailer URLs; search
+  // again here was duplicating PCKT + SerpApi usage and occasionally reintroducing
+  // neighboring models. Reuse the product's own grouped listings only.
+  const offers: MarketplaceOffer[] = target.listings
+    .map((listing, index) => seedListingOffer(listing, target, index))
+    .filter((offer): offer is MarketplaceOffer => !!offer);
 
-  const serpKey = process.env.SERPAPI_API_KEY;
-  if (!serpKey) statuses.push({ key: "shopping", name: "Google Shopping merchants", status: "not_configured", results: 0, message: "SERPAPI_API_KEY is not configured. Grouped marketplace listings remain available." });
-  else if (!persistenceAvailable) statuses.push({ key: "shopping", name: "Google Shopping merchants", status: "error", results: 0, message: "Neon is temporarily unavailable, so live provider pulls are paused to avoid untracked API usage." });
-  else if ((await getProviderCooldown("shopping")).paused) {
-    const cooldown = await getProviderCooldown("shopping");
-    statuses.push({ key: "shopping", name: "Google Shopping merchants", status: "cooldown", results: 0, message: `Temporarily paused after repeated provider errors${cooldown.disabledUntil ? ` until ${cooldown.disabledUntil}` : ""}.` });
-  } else if (!(await reserveBudget("serpapi", 1, SERPAPI_MONTHLY_BUDGET))) statuses.push({ key: "shopping", name: "Google Shopping merchants", status: "budget_reached", results: 0, message: "Monthly SerpApi safety budget reached; grouped catalog listings remain available." });
-  else {
-    const providerStartedAt = Date.now();
-    try {
-      const url = new URL("https://serpapi.com/search.json");
-      url.searchParams.set("engine", "google_shopping"); url.searchParams.set("q", query); url.searchParams.set("gl", "us"); url.searchParams.set("hl", "en"); url.searchParams.set("api_key", serpKey);
-      const payload = obj(await fetchJson(url)) ?? {};
-      await recordProviderSuccess("shopping", Date.now() - providerStartedAt);
-      const shopping = Array.isArray(payload.shopping_results) ? payload.shopping_results : [];
-      const found = shopping.map(obj).filter((item): item is Record<string, unknown> => !!item).map((item) => normalizeShopping(item, target)).filter((offer): offer is MarketplaceOffer => !!offer);
-      offers.push(...found);
-      statuses.push({ key: "shopping", name: "Google Shopping merchants", status: "success", results: found.length, message: found.length ? `${found.length} merchant listing(s) passed the exact model match checks.` : "No merchant listing passed the exact product match checks." });
-    } catch (error) {
-      await recordProviderFailure("shopping", Date.now() - providerStartedAt, error);
-      statuses.push({ key: "shopping", name: "Google Shopping merchants", status: "error", results: 0, message: error instanceof Error ? error.message : "Shopping request failed." });
-    }
-  }
+  const sourceNames: Record<OfferSource, string> = {
+    stockx: "StockX", goat: "GOAT", flightclub: "Flight Club",
+    kickscrew: "Kicks Crew", shopping: "Google Shopping merchants",
+  };
+  const statuses: SourceStatus[] = (Object.keys(sourceNames) as OfferSource[]).map((source) => {
+    const count = offers.filter((offer) => offer.source === source).length;
+    return {
+      key: source,
+      name: sourceNames[source],
+      status: "cached",
+      results: count,
+      message: count
+        ? `${count} exact retailer listing(s) reused from the selected catalog product. No new provider search request or credit was used.`
+        : "No listing from this retailer was present in the selected product's catalog group. Compare offers will not insert a similar product from a new broad search.",
+    };
+  });
 
   // Apply the audience selected by the shopper to each retailer listing, not
   // merely to the grouped catalog card. GS/PS/youth variants are excluded from
@@ -489,5 +422,5 @@ export async function POST(request: NextRequest) {
   };
   try { await persistCatalogSnapshot([canonicalProduct], results); } catch { /* normalized inventory is an additive index; offers remain visible */ }
   try { await writeCache(cacheKey, query, results, statuses); } catch { /* keep live offers visible if caching fails */ }
-  return NextResponse.json({ productId: target.id, offers: results, sources: statuses, cached: false, persistenceAvailable, cacheHours: CACHE_HOURS, note: "Only direct grouped listings and provider results that pass exact-product and selected-audience matching are included. The seller page remains the final source for variant and checkout confirmation." });
+  return NextResponse.json({ productId: target.id, offers: results, sources: statuses, cached: false, persistenceAvailable, cacheHours: CACHE_HOURS, note: "Only direct retailer listings already grouped with this exact catalog product are shown. Compare offers does not run new broad product searches or spend catalog-search credits. The seller page remains the final source for variant and checkout confirmation." });
 }

@@ -2,16 +2,16 @@ import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { filterSizeQuotesForAudience, inferSizeSystem } from "@/lib/audience";
-import { persistOfferSizeQuotes } from "@/lib/catalog-store";
-import { getProviderCooldown, recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
-import type { MarketplaceSizeQuote } from "@/lib/types";
+import { persistCatalogSnapshot, persistOfferSizeQuotes } from "@/lib/catalog-store";
+import { reserveProviderBudget } from "@/lib/provider-budget";
+import { getProviderCooldown, recordProviderFailure, recordProviderSizeSync, recordProviderSuccess } from "@/lib/provider-health";
+import type { CatalogBrowseProduct, CatalogListing, MarketplaceSizeQuote } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 45;
 
-const PCKT_MONTHLY_BUDGET = 450;
 type QuoteSource = "stockx" | "goat" | "flightclub";
-type ListingRef = { source: QuoteSource; providerProductId: string; retailer: string; catalogProductId: string; gender?: string };
+type ListingRef = { source: QuoteSource; providerProductId: string; listingUrl?: string; retailer: string; catalogProductId: string; gender?: string };
 type ProductRef = { catalogProductId: string; listings: ListingRef[]; needsImage: boolean; audience: string };
 type CachedDetail = { quotes: MarketplaceSizeQuote[]; imageUrl?: string; colors?: string[]; gender?: string; checkedAt?: string };
 
@@ -98,7 +98,7 @@ function sizeSystem(baseType: string, label = "", fallbackGender = ""): Marketpl
   return inferSizeSystem(baseType, label, fallbackGender);
 }
 function cacheKey(source: QuoteSource, id: string) {
-  return createHash("sha256").update(`size-quotes:v5:${source}:${id}:us`).digest("hex");
+  return createHash("sha256").update(`size-quotes:v6:${source}:${id}:us`).digest("hex");
 }
 async function readCachedData(source: QuoteSource, id: string): Promise<CachedDetail | null> {
   const sql = getDb();
@@ -150,7 +150,7 @@ async function saveCachedProductImage(source: "stockx" | "goat", id: string, det
 async function fetchCachedProviderImage(source: "stockx" | "goat", id: string, apiKey: string): Promise<Record<string, unknown> | null> {
   const cached = await readCachedProductImage(source, id);
   if (cached) return cached;
-  if (!(await reservePcktBudget(0.4))) return null;
+  if (!(await reserveProviderBudget("pckt", 0.4))) return null;
   await waitForPcktSlot();
   const url = new URL(`https://api.pckt.sh/v1/catalog/${source}/product`);
   url.searchParams.set("id", id);
@@ -163,19 +163,7 @@ async function fetchCachedProviderImage(source: "stockx" | "goat", id: string, a
   if (detail) await saveCachedProductImage(source, id, detail);
   return detail;
 }
-async function reservePcktBudget(units: number) {
-  const sql = getDb();
-  if (!sql) return false;
-  const rows = await sql`
-    INSERT INTO retailer_api_usage (provider, usage_month, units_reserved)
-    VALUES ('pckt', date_trunc('month', now())::date, ${units})
-    ON CONFLICT (provider, usage_month)
-    DO UPDATE SET units_reserved = retailer_api_usage.units_reserved + EXCLUDED.units_reserved
-    WHERE retailer_api_usage.units_reserved + EXCLUDED.units_reserved <= ${PCKT_MONTHLY_BUDGET}
-    RETURNING units_reserved
-  `;
-  return rows.length > 0;
-}
+
 async function waitForPcktSlot() {
   const sql = getDb();
   if (!sql) throw new Error("Neon is required to enforce PCKT's shared rate limit.");
@@ -211,7 +199,8 @@ function makeStockxQuotes(payload: unknown, retailer: string, productId: string,
     // An explicit zero ask count takes precedence over a stale lowest_ask value.
     const available = askCount !== undefined ? askCount > 0 : (lowestAsk !== undefined && lowestAsk > 0 ? true : null);
     const system = sizeSystem(baseType, baseSize, fallbackGender);
-    const suffix = system === "men" ? " M" : system === "women" ? " W" : system === "youth" ? " Y" : "";
+    const hasSystemMarker = sizeSystem("", baseSize, "") !== "unknown";
+    const suffix = !hasSystemMarker && system === "men" ? " M" : !hasSystemMarker && system === "women" ? " W" : !hasSystemMarker && system === "youth" ? " Y" : "";
     quotes.push({
       label: `${baseSize}${suffix}`.trim(), available, price: lowestAsk,
       currency: str(row.currency, "USD").toUpperCase(),
@@ -230,7 +219,8 @@ function makeGoatQuotes(payload: unknown, retailer: string, productId: string, p
     const available = typeof row.available === "boolean" ? row.available : null;
     const lowestAsk = num(row.lowest_ask);
     const system = sizeSystem(productGender, rawLabel, productGender);
-    const suffix = system === "men" ? " M" : system === "women" ? " W" : system === "youth" && !/y$/i.test(rawLabel) ? " Y" : "";
+    const hasSystemMarker = sizeSystem("", rawLabel, "") !== "unknown";
+    const suffix = !hasSystemMarker && system === "men" ? " M" : !hasSystemMarker && system === "women" ? " W" : !hasSystemMarker && system === "youth" ? " Y" : "";
     const label = `${rawLabel}${suffix}`.trim();
     quotes.push({
       label, available, price: lowestAsk, currency: str(row.currency, "USD").toUpperCase(),
@@ -302,6 +292,7 @@ export async function POST(request: NextRequest) {
     const listings: ListingRef[] = rawListings.map(obj).filter((value): value is Record<string, unknown> => !!value).map((listing) => ({
       source: str(listing.source) as QuoteSource,
       providerProductId: str(listing.providerProductId),
+      listingUrl: str(listing.url) || undefined,
       retailer: str(listing.retailer, str(listing.source).toUpperCase()),
       catalogProductId,
       gender: (str(listing.gender) && str(listing.gender).toLowerCase() !== "unknown") ? str(listing.gender) : str(item.gender),
@@ -310,8 +301,50 @@ export async function POST(request: NextRequest) {
   }).filter((product) => product.catalogProductId && product.listings.length > 0);
 
   if (!products.length) return NextResponse.json({ error: "The selected catalog product has no StockX, GOAT or Flight Club product reference for size lookup." }, { status: 400 });
+
+  const rawCanonical = obj(body?.catalogProduct);
+  if (rawCanonical) {
+    const canonicalListings: CatalogListing[] = (Array.isArray(rawCanonical.listings) ? rawCanonical.listings : []).map(obj)
+      .filter((value): value is Record<string, unknown> => !!value)
+      .map((value) => ({
+        source: str(value.source) as CatalogListing["source"],
+        retailer: str(value.retailer, value.source),
+        title: str(value.title) || undefined,
+        url: str(value.url),
+        providerProductId: str(value.providerProductId) || undefined,
+        styleCode: str(value.styleCode) || undefined,
+        imageUrl: str(value.imageUrl) || undefined,
+        price: num(value.price),
+        originalPrice: num(value.originalPrice),
+        currency: str(value.currency, "USD"),
+        color: str(value.color) || undefined,
+        sizes: Array.isArray(value.sizes) ? value.sizes.filter((size): size is string => typeof size === "string") : undefined,
+        gender: str(value.gender, "Unknown") as CatalogListing["gender"],
+        releaseYear: Number.isInteger(Number(value.releaseYear)) ? Number(value.releaseYear) : undefined,
+        onSale: typeof value.onSale === "boolean" ? value.onSale : undefined,
+      })).filter((listing) => Boolean(listing.url) && ["stockx", "goat", "flightclub", "kickscrew", "shopping"].includes(listing.source));
+    const category = ["sneakers", "apparel", "accessories", "all"].includes(str(rawCanonical.category)) ? str(rawCanonical.category) as CatalogBrowseProduct["category"] : "all";
+    const canonicalProduct: CatalogBrowseProduct = {
+      id: str(rawCanonical.id, products[0].catalogProductId),
+      title: str(rawCanonical.title), brand: str(rawCanonical.brand), category,
+      styleCode: str(rawCanonical.styleCode) || undefined,
+      imageUrl: str(rawCanonical.imageUrl) || undefined,
+      sources: Array.isArray(rawCanonical.sources) ? rawCanonical.sources.filter((value): value is string => typeof value === "string") : [],
+      listings: canonicalListings,
+      color: str(rawCanonical.color) || undefined,
+      colors: Array.isArray(rawCanonical.colors) ? rawCanonical.colors.filter((value): value is string => typeof value === "string") : [],
+      sizes: Array.isArray(rawCanonical.sizes) ? rawCanonical.sizes.filter((value): value is string => typeof value === "string") : [],
+      gender: str(rawCanonical.gender, "Unknown") as CatalogBrowseProduct["gender"],
+      releaseYear: Number.isInteger(Number(rawCanonical.releaseYear)) ? Number(rawCanonical.releaseYear) : undefined,
+      onSale: typeof rawCanonical.onSale === "boolean" ? rawCanonical.onSale : undefined,
+    };
+    if (canonicalProduct.title && canonicalProduct.brand) {
+      try { await persistCatalogSnapshot([canonicalProduct]); } catch { /* size lookup still runs; URL-based persistence will explain an unmatched offer */ }
+    }
+  }
+
   const apiKey = process.env.PCKT_API_KEY;
-  if (!apiKey) return NextResponse.json({ error: "PCKT_API_KEY is not configured; size-level marketplace lookup is unavailable." }, { status: 503 });
+  // Neon quote caches remain useful even when the external provider key is missing.
 
   const allListings = products.flatMap((product) => product.listings);
   const uniqueBySource: Record<QuoteSource, ListingRef[]> = { stockx: [], goat: [], flightclub: [] };
@@ -335,10 +368,14 @@ export async function POST(request: NextRequest) {
       } catch { uncached.push(listing); }
     }
     if (uncached.length) {
+      if (!apiKey) {
+        sources.push({ name, status: "not_configured", message: "PCKT_API_KEY is not configured. Existing cached size records remain available." });
+        continue;
+      }
       const cooldown = await getProviderCooldown(source);
       if (cooldown.paused) {
         sources.push({ name, status: "cooldown", message: `Temporarily paused after repeated provider errors until ${cooldown.disabledUntil}. Cached size data remains available.` });
-      } else if (!(await reservePcktBudget(0.4))) {
+      } else if (!(await reserveProviderBudget("pckt", 0.4))) {
         sources.push({ name, status: "budget_reached", message: "Monthly PCKT safety budget reached; showing cached size data only." });
       } else {
         const providerStartedAt = Date.now();
@@ -348,16 +385,23 @@ export async function POST(request: NextRequest) {
           url.searchParams.set("ids", uncached.map((item) => item.providerProductId).join(","));
           url.searchParams.set("market", "US");
           const payload = await fetchJson(url, apiKey);
-          await recordProviderSuccess(source, Date.now() - providerStartedAt);
+          let sourceQuoteCount = 0;
           for (const listing of uncached) {
             const quotes = source === "stockx"
               ? makeStockxQuotes(payload, listing.retailer, listing.providerProductId, listing.gender)
               : makeGoatQuotes(payload, listing.retailer, listing.providerProductId, listing.gender);
-            const detail = { quotes };
+            sourceQuoteCount += quotes.length;
+            const detail = { quotes, checkedAt: new Date().toISOString() };
             quoteMap.set(`${source}:${listing.providerProductId}`, detail);
             try { await writeCachedData(source, listing.providerProductId, detail); } catch { /* keep live results */ }
           }
-          sources.push({ name, status: "success", message: `Loaded size-level marketplace pricing for ${uncached.length} product record(s).` });
+          await recordProviderSuccess(source, Date.now() - providerStartedAt);
+          sources.push({
+            name, status: sourceQuoteCount ? "success" : "no_data",
+            message: sourceQuoteCount
+              ? `Extracted ${sourceQuoteCount} size-level quote(s) across ${uncached.length} product record(s).`
+              : `The provider returned HTTP success, but zero size rows matched these product IDs. The response was cached to avoid repeating the same paid request; check provider IDs/response shape.`,
+          });
         } catch (error) {
           await recordProviderFailure(source, Date.now() - providerStartedAt, error);
           sources.push({ name, status: "error", message: error instanceof Error ? error.message : "Size lookup failed." });
@@ -385,7 +429,11 @@ export async function POST(request: NextRequest) {
         sources.push({ name, status: "cooldown", message: `Temporarily paused after repeated provider errors until ${cooldown.disabledUntil}.` });
         continue;
       }
-      if (!(await reservePcktBudget(1))) {
+      if (!apiKey) {
+        sources.push({ name, status: "not_configured", message: "PCKT_API_KEY is not configured. Cached Flight Club size records remain available." });
+        continue;
+      }
+      if (!(await reserveProviderBudget("pckt", 1))) {
         sources.push({ name, status: "budget_reached", message: "Monthly PCKT safety budget reached; no Flight Club detail request was sent." });
         continue;
       }
@@ -396,11 +444,16 @@ export async function POST(request: NextRequest) {
       url.searchParams.set("countryCode", "US");
       url.searchParams.set("currencyCode", "USD");
       const payload = await fetchJson(url, apiKey);
+      const detail = { ...makeFlightClubDetail(payload, listing.retailer, listing.gender), checkedAt: new Date().toISOString() };
       await recordProviderSuccess("flightclub", Date.now() - (providerStartedAt ?? Date.now()));
-      const detail = makeFlightClubDetail(payload, listing.retailer, listing.gender);
       quoteMap.set(`flightclub:${listing.providerProductId}`, detail);
       try { await writeCachedData("flightclub", listing.providerProductId, detail); } catch { /* keep live results */ }
-      sources.push({ name, status: "success", message: `Loaded ${detail.quotes.length} explicitly available new size option(s).` });
+      sources.push({
+        name, status: detail.quotes.length ? "success" : "no_data",
+        message: detail.quotes.length
+          ? `Loaded ${detail.quotes.length} explicitly available new size option(s).`
+          : "Flight Club returned product detail but no entries in its explicit available-new-size fields. Generic size-picker options are not treated as inventory.",
+      });
     } catch (error) {
       if (providerStartedAt !== null) await recordProviderFailure("flightclub", Date.now() - providerStartedAt, error);
       sources.push({ name, status: "error", message: error instanceof Error ? error.message : "Flight Club product lookup failed." });
@@ -432,6 +485,7 @@ export async function POST(request: NextRequest) {
       // Keep the source narrowing explicit for TypeScript before calling the
       // StockX/GOAT-only product-detail endpoint.
       if (listing.source !== "stockx" && listing.source !== "goat") continue;
+      if (!apiKey) continue;
       try {
         const cached = await fetchCachedProviderImage(listing.source, listing.providerProductId, apiKey);
         if (!cached) continue;
@@ -452,17 +506,26 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const persistedQuotes: Array<{ source: QuoteSource; providerProductId: string; quotes: MarketplaceSizeQuote[]; checkedAt?: string }> = [];
+    const persistedQuotes: Array<{ source: QuoteSource; providerProductId: string; listingUrl?: string; quotes: MarketplaceSizeQuote[]; checkedAt?: string }> = [];
     for (const listing of allListings) {
       const detail = quoteMap.get(`${listing.source}:${listing.providerProductId}`);
       if (detail) persistedQuotes.push({
         source: listing.source,
         providerProductId: listing.providerProductId,
+        listingUrl: listing.listingUrl,
         quotes: detail.quotes,
         checkedAt: detail.checkedAt,
       });
     }
-    await persistOfferSizeQuotes(persistedQuotes);
+    const metrics = await persistOfferSizeQuotes(persistedQuotes);
+    for (const source of ["stockx", "goat", "flightclub"] as const) {
+      const metric = metrics.find((item) => item.source === source) || { quoteCount: 0, matchedOffers: 0, persistedVariants: 0 };
+      await recordProviderSizeSync(source, metric.quoteCount, metric.matchedOffers, metric.persistedVariants);
+    }
+    for (const entry of sources) {
+      const metric = metrics.find((item) => item.source === entry.name.toLowerCase().replace(/\s+/g, ""));
+      if (metric) entry.message += ` Neon matched ${metric.matchedOffers} offer(s) and stored ${metric.persistedVariants} size variant(s).`;
+    }
   } catch { /* size feed results remain available in the response/cache if normalized persistence fails */ }
 
   const checks = products.map((product) => {

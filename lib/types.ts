@@ -115,7 +115,7 @@ export type CatalogBrowseProduct = {
 
 export type MarketplaceSourceStatus = {
   name: string;
-  status: "success" | "not_configured" | "error" | "budget_reached" | "cooldown";
+  status: "success" | "cached" | "not_configured" | "error" | "budget_reached" | "cooldown";
   results: number;
   message: string;
 };

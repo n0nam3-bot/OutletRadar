@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { PROVIDER_BUDGETS } from "@/lib/provider-budget";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,10 +29,17 @@ export async function GET(request: NextRequest) {
       WHERE usage_month = date_trunc('month', NOW())::date
       ORDER BY provider
     ` as Array<{ provider: string; units_reserved: string | number; usage_month: string | Date }>;
+    const dailyRows = await sql`
+      SELECT provider, units_reserved
+      FROM retailer_api_usage_daily
+      WHERE usage_day = CURRENT_DATE
+      ORDER BY provider
+    ` as Array<{ provider: string; units_reserved: string | number }>;
     const healthRows = await sql`
       SELECT provider, last_attempt_at, last_success_at, last_error_at,
-        last_error_code, last_error_message, last_latency_ms,
-        consecutive_failures, disabled_until, updated_at
+        last_error_code, last_error_message, last_latency_ms, last_result_count,
+        last_size_quote_count, last_size_matched_offers, last_size_persisted_variants,
+        last_size_checked_at, consecutive_failures, disabled_until, updated_at
       FROM provider_health
       ORDER BY provider
     ` as Array<Record<string, unknown>>;
@@ -39,31 +47,51 @@ export async function GET(request: NextRequest) {
       SELECT
         (SELECT COUNT(*)::int FROM canonical_products) AS canonical_products,
         (SELECT COUNT(*)::int FROM retailer_offers) AS retailer_offers,
-        (SELECT COUNT(*)::int FROM retailer_offer_sizes) AS size_variants
-    ` as Array<{ canonical_products: number; retailer_offers: number; size_variants: number }>;
+        (SELECT COUNT(*)::int FROM retailer_offer_sizes) AS size_variants,
+        (SELECT COUNT(*)::int FROM retailer_offer_sizes WHERE availability_state IN ('available','unavailable') AND (expires_at IS NULL OR expires_at > NOW())) AS verified_size_signals,
+        (SELECT COUNT(*)::int FROM retailer_offer_sizes WHERE availability_state = 'available' AND (expires_at IS NULL OR expires_at > NOW())) AS available_size_signals,
+        (SELECT COUNT(*)::int FROM retailer_offer_sizes WHERE availability_state = 'unknown') AS unknown_size_labels
+    ` as Array<{
+      canonical_products: number; retailer_offers: number; size_variants: number;
+      verified_size_signals: number; available_size_signals: number; unknown_size_labels: number;
+    }>;
 
     const usage = new Map(usageRows.map((row) => [row.provider, Number(row.units_reserved)]));
+    const dailyUsage = new Map(dailyRows.map((row) => [row.provider, Number(row.units_reserved)]));
     const counts = catalogRows[0] || { canonical_products: 0, retailer_offers: 0, size_variants: 0 };
     return NextResponse.json({
       service: "outlet-radar",
-      version: "2.1.0",
+      version: "2.2.0",
       checkedAt: new Date().toISOString(),
-      budgets: [
-        { provider: "PCKT", used: usage.get("pckt") || 0, limit: 450, remaining: Math.max(0, 450 - (usage.get("pckt") || 0)) },
-        { provider: "SerpApi", used: usage.get("serpapi") || 0, limit: 200, remaining: Math.max(0, 200 - (usage.get("serpapi") || 0)) },
-      ],
+      budgets: (Object.keys(PROVIDER_BUDGETS) as Array<keyof typeof PROVIDER_BUDGETS>).map((provider) => {
+        const monthlyLimit = PROVIDER_BUDGETS[provider].monthly;
+        const dailyLimit = PROVIDER_BUDGETS[provider].daily;
+        const monthlyUsed = usage.get(provider) || 0;
+        const dailyUsed = dailyUsage.get(provider) || 0;
+        return {
+          provider: provider === "pckt" ? "PCKT" : provider === "serpapi" ? "SerpApi" : "API.SH",
+          used: monthlyUsed, limit: monthlyLimit, remaining: Math.max(0, monthlyLimit - monthlyUsed),
+          dailyUsed, dailyLimit, dailyRemaining: Math.max(0, dailyLimit - dailyUsed),
+        };
+      }),
       providers: healthRows,
       catalog: {
         canonicalProducts: counts.canonical_products,
         retailerOffers: counts.retailer_offers,
         sizeVariants: counts.size_variants,
+        verifiedSizeSignals: counts.verified_size_signals,
+        availableSizeSignals: counts.available_size_signals,
+        unknownSizeLabels: counts.unknown_size_labels,
       },
       notes: [
         "Budget values are application-side reservations, not the provider's authoritative billing ledger.",
+        "Daily and monthly ceilings are safety guardrails shared by catalog, comparison and size-lookup requests.",
         "A size row marked available is a provider-reported offer signal, not a guarantee that checkout will succeed.",
+        "Provider connectivity and size coverage are separate: a successful HTTP response may still return no usable size rows. The size sync timestamp, extracted quote count, matched offers and stored variants are shown separately.",
+        "Total size variants include unverified labels; verified size signals are counted separately from labels whose availability is unknown.",
       ],
     }, { headers: { "Cache-Control": "no-store" } });
   } catch {
-    return NextResponse.json({ error: "Provider diagnostics are unavailable. Confirm that db/migrations/002_catalog_inventory.sql has been applied to the Neon branch used by DATABASE_URL." }, { status: 503 });
+    return NextResponse.json({ error: "Provider diagnostics are unavailable. Confirm that db/migrations/002_catalog_inventory.sql and 003_provider_budget_and_size_diagnostics.sql have been applied to the Neon branch used by DATABASE_URL." }, { status: 503 });
   }
 }

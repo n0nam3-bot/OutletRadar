@@ -637,7 +637,7 @@ export default function Home() {
         const candidates = discovered.slice(0, 20).map((product) => ({
           catalogProductId: product.id,
           listings: (product.listings ?? []).filter((listing) => (listing.source === "stockx" || listing.source === "goat") && listing.providerProductId).map((listing) => ({
-            source: listing.source, providerProductId: listing.providerProductId, retailer: listing.retailer, gender: listing.gender && listing.gender !== "Unknown" ? listing.gender : product.gender,
+            source: listing.source, providerProductId: listing.providerProductId, url: listing.url, retailer: listing.retailer, gender: listing.gender && listing.gender !== "Unknown" ? listing.gender : product.gender,
           })),
         })).filter((product) => product.listings.length > 0);
         if (candidates.length) {
@@ -670,14 +670,19 @@ export default function Home() {
       const response = await fetch("/api/catalog/availability", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ audience: catalogGender, products: [{
-          catalogProductId: product.id,
+        body: JSON.stringify({
           audience: catalogGender,
-          needsImage: !(product.imageUrl || (product.listings ?? []).some((listing) => listing.imageUrl)),
-          listings: (product.listings ?? []).filter((listing) => (listing.source === "stockx" || listing.source === "goat" || listing.source === "flightclub") && listing.providerProductId).map((listing) => ({
-            source: listing.source, providerProductId: listing.providerProductId, retailer: listing.retailer, gender: listing.gender && listing.gender !== "Unknown" ? listing.gender : product.gender,
-          })),
-        }] }),
+          catalogProduct: product,
+          products: [{
+            catalogProductId: product.id,
+            audience: catalogGender,
+            needsImage: !(product.imageUrl || (product.listings ?? []).some((listing) => listing.imageUrl)),
+            listings: (product.listings ?? []).filter((listing) => (listing.source === "stockx" || listing.source === "goat" || listing.source === "flightclub") && listing.providerProductId).map((listing) => ({
+              source: listing.source, providerProductId: listing.providerProductId, url: listing.url,
+              retailer: listing.retailer, gender: listing.gender && listing.gender !== "Unknown" ? listing.gender : product.gender,
+            })),
+          }],
+        }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Could not retrieve marketplace size data.");

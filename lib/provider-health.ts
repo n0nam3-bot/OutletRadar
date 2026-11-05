@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/db";
 
-export type ProviderHealthKey = "stockx" | "goat" | "flightclub" | "kickscrew" | "shopping";
+export type ProviderHealthKey = "stockx" | "goat" | "flightclub" | "kickscrew" | "shopping" | "apish";
 export type ProviderCooldown = { paused: boolean; disabledUntil?: string; consecutiveFailures: number };
 
 /** Provider health telemetry is best-effort: an observability failure must not
@@ -26,18 +26,19 @@ export async function getProviderCooldown(provider: ProviderHealthKey): Promise<
   }
 }
 
-export async function recordProviderSuccess(provider: ProviderHealthKey, latencyMs: number): Promise<void> {
+export async function recordProviderSuccess(provider: ProviderHealthKey, latencyMs: number, resultCount?: number): Promise<void> {
   const sql = getDb();
   if (!sql) return;
   try {
     await sql`
       INSERT INTO provider_health (
-        provider, last_attempt_at, last_success_at, last_latency_ms,
+        provider, last_attempt_at, last_success_at, last_latency_ms, last_result_count,
         consecutive_failures, disabled_until, last_error_code, last_error_message, updated_at
-      ) VALUES (${provider}, NOW(), NOW(), ${Math.max(0, Math.round(latencyMs))}, 0, NULL, NULL, NULL, NOW())
+      ) VALUES (${provider}, NOW(), NOW(), ${Math.max(0, Math.round(latencyMs))}, COALESCE(${resultCount === undefined ? null : Math.max(0, Math.round(resultCount))}, 0), 0, NULL, NULL, NULL, NOW())
       ON CONFLICT (provider) DO UPDATE SET
         last_attempt_at = NOW(), last_success_at = NOW(),
         last_latency_ms = EXCLUDED.last_latency_ms,
+        last_result_count = CASE WHEN ${resultCount === undefined} THEN provider_health.last_result_count ELSE EXCLUDED.last_result_count END,
         consecutive_failures = 0, disabled_until = NULL,
         last_error_code = NULL, last_error_message = NULL, updated_at = NOW()
     `;
@@ -56,8 +57,8 @@ export async function recordProviderFailure(provider: ProviderHealthKey, latency
     await sql`
       INSERT INTO provider_health (
         provider, last_attempt_at, last_error_at, last_error_code,
-        last_error_message, last_latency_ms, consecutive_failures, disabled_until, updated_at
-      ) VALUES (${provider}, NOW(), NOW(), ${code}, ${message}, ${Math.max(0, Math.round(latencyMs))}, 1, NULL, NOW())
+        last_error_message, last_latency_ms, last_result_count, consecutive_failures, disabled_until, updated_at
+      ) VALUES (${provider}, NOW(), NOW(), ${code}, ${message}, ${Math.max(0, Math.round(latencyMs))}, 0, 1, NULL, NOW())
       ON CONFLICT (provider) DO UPDATE SET
         last_attempt_at = NOW(), last_error_at = NOW(),
         last_error_code = EXCLUDED.last_error_code,
@@ -73,5 +74,34 @@ export async function recordProviderFailure(provider: ProviderHealthKey, latency
     `;
   } catch {
     // Monitoring is deliberately non-blocking.
+  }
+}
+
+
+export async function recordProviderSizeSync(
+  provider: ProviderHealthKey,
+  quoteCount: number,
+  matchedOffers: number,
+  persistedVariants: number,
+): Promise<void> {
+  const sql = getDb();
+  if (!sql) return;
+  try {
+    await sql`
+      INSERT INTO provider_health (
+        provider, last_size_quote_count, last_size_matched_offers,
+        last_size_persisted_variants, last_size_checked_at, updated_at
+      ) VALUES (
+        ${provider}, ${Math.max(0, quoteCount)}, ${Math.max(0, matchedOffers)},
+        ${Math.max(0, persistedVariants)}, NOW(), NOW()
+      )
+      ON CONFLICT (provider) DO UPDATE SET
+        last_size_quote_count = EXCLUDED.last_size_quote_count,
+        last_size_matched_offers = EXCLUDED.last_size_matched_offers,
+        last_size_persisted_variants = EXCLUDED.last_size_persisted_variants,
+        last_size_checked_at = NOW(), updated_at = NOW()
+    `;
+  } catch {
+    // Diagnostics must never interrupt a working size response.
   }
 }

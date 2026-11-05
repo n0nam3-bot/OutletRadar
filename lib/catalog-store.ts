@@ -248,48 +248,120 @@ export async function persistCatalogSnapshot(products: CatalogBrowseProduct[], a
   `;
 }
 
+export type SizePersistenceMetric = {
+  source: string;
+  quoteCount: number;
+  matchedOffers: number;
+  persistedVariants: number;
+};
+
 export async function persistOfferSizeQuotes(
-  rows: Array<{ source: string; providerProductId: string; quotes: MarketplaceSizeQuote[]; checkedAt?: string }>,
-): Promise<void> {
+  rows: Array<{
+    source: string;
+    providerProductId: string;
+    listingUrl?: string;
+    quotes: MarketplaceSizeQuote[];
+    checkedAt?: string;
+  }>,
+): Promise<SizePersistenceMetric[]> {
   const sql = getDb();
-  if (!sql || !rows.length) return;
-  const inputs = rows.filter((row) => row.providerProductId && SOURCE_KEYS.has(row.source)).flatMap((row) => row.quotes.map((quote) => ({
-    source: row.source,
-    provider_product_id: row.providerProductId,
-    checked_at: row.checkedAt || null,
-    size_label: quote.label,
-    size_system: quote.sizeSystem || "unknown",
-    availability_state: quote.available === true ? "available" : quote.available === false ? "unavailable" : "unknown",
-    price: quote.price ?? null,
-    currency: quote.currency || "USD",
-    source_status: quote.status || null,
-  })));
-  if (!inputs.length) return;
-  await sql`
-    WITH incoming AS (
-      SELECT * FROM jsonb_to_recordset(${JSON.stringify(inputs)}::jsonb) AS x(
-        source text, provider_product_id text, checked_at text, size_label text, size_system text,
-        availability_state text, price numeric, currency text, source_status text
+  const grouped = new Map<string, typeof rows>();
+  for (const row of rows) {
+    if (!SOURCE_KEYS.has(row.source)) continue;
+    const current = grouped.get(row.source) ?? [];
+    current.push(row);
+    grouped.set(row.source, current);
+  }
+
+  const metrics: SizePersistenceMetric[] = [];
+  for (const [source, sourceRows] of grouped) {
+    const deduped = new Map<string, Record<string, unknown>>();
+    let quoteCount = 0;
+    for (const row of sourceRows) {
+      for (const quote of row.quotes) {
+        quoteCount++;
+        const label = quote.label.trim();
+        if (!label) continue;
+        const system = quote.sizeSystem || "unknown";
+        const key = `${row.listingUrl || row.providerProductId}:${label.toLowerCase()}:${system}`;
+        deduped.set(key, {
+          source,
+          provider_product_id: row.providerProductId || null,
+          listing_url: row.listingUrl || null,
+          checked_at: row.checkedAt || null,
+          size_label: label,
+          size_system: system,
+          availability_state: quote.available === true ? "available" : quote.available === false ? "unavailable" : "unknown",
+          price: quote.price ?? null,
+          currency: quote.currency || "USD",
+          source_status: quote.status || null,
+        });
+      }
+    }
+
+    if (!sql || deduped.size === 0) {
+      metrics.push({ source, quoteCount, matchedOffers: 0, persistedVariants: 0 });
+      continue;
+    }
+
+    const inputs = [...deduped.values()];
+    const result = await sql`
+      WITH incoming AS (
+        SELECT * FROM jsonb_to_recordset(${JSON.stringify(inputs)}::jsonb) AS x(
+          source text, provider_product_id text, listing_url text, checked_at text,
+          size_label text, size_system text, availability_state text,
+          price numeric, currency text, source_status text
+        )
+      ), target_offers AS (
+        SELECT DISTINCT
+          o.id AS offer_id, i.size_label, i.size_system, i.availability_state,
+          i.price, i.currency, i.source_status, i.checked_at
+        FROM incoming i
+        JOIN retailer_offers o ON o.source = i.source AND (
+          (i.listing_url IS NOT NULL AND o.listing_url = i.listing_url)
+          OR (i.listing_url IS NULL AND i.provider_product_id IS NOT NULL AND o.provider_product_id = i.provider_product_id)
+        )
+      ), size_upsert AS (
+        INSERT INTO retailer_offer_sizes (
+          offer_id, size_label, normalized_size, size_system, availability_state,
+          price, currency, source_status, last_checked_at, last_seen_at, expires_at
+        )
+        SELECT
+          offer_id, size_label, regexp_replace(lower(size_label), '[^a-z0-9.]+', '', 'g'),
+          CASE WHEN size_system IN ('men','women','youth','toddler','infant','unisex') THEN size_system ELSE 'unknown' END,
+          CASE WHEN availability_state IN ('available','unavailable') THEN availability_state ELSE 'unknown' END,
+          price, currency, source_status,
+          COALESCE(NULLIF(checked_at, '')::timestamptz, NOW()), NOW(),
+          COALESCE(NULLIF(checked_at, '')::timestamptz, NOW()) + INTERVAL '6 hours'
+        FROM target_offers
+        ON CONFLICT (offer_id, size_label, size_system) DO UPDATE SET
+          normalized_size = EXCLUDED.normalized_size,
+          availability_state = CASE
+            WHEN EXCLUDED.availability_state = 'unknown'
+              AND retailer_offer_sizes.availability_state IN ('available','unavailable')
+              AND retailer_offer_sizes.expires_at > NOW()
+            THEN retailer_offer_sizes.availability_state
+            ELSE EXCLUDED.availability_state
+          END,
+          price = COALESCE(EXCLUDED.price, retailer_offer_sizes.price),
+          currency = EXCLUDED.currency,
+          source_status = COALESCE(EXCLUDED.source_status, retailer_offer_sizes.source_status),
+          last_checked_at = COALESCE(EXCLUDED.last_checked_at, retailer_offer_sizes.last_checked_at),
+          last_seen_at = NOW(),
+          expires_at = COALESCE(EXCLUDED.expires_at, NOW() + INTERVAL '6 hours')
+        RETURNING offer_id
       )
-    ), target_offers AS (
-      SELECT o.id, i.size_label, i.size_system, i.availability_state, i.price, i.currency, i.source_status, i.checked_at
-      FROM incoming i JOIN retailer_offers o
-        ON o.source = i.source AND o.provider_product_id = i.provider_product_id
-    )
-    INSERT INTO retailer_offer_sizes (
-      offer_id, size_label, normalized_size, size_system, availability_state,
-      price, currency, source_status, last_checked_at, last_seen_at, expires_at
-    )
-    SELECT id, size_label, regexp_replace(lower(size_label), '[^a-z0-9.]+', '', 'g'),
-      CASE WHEN size_system IN ('men','women','youth','toddler','infant','unisex') THEN size_system ELSE 'unknown' END,
-      CASE WHEN availability_state IN ('available','unavailable') THEN availability_state ELSE 'unknown' END,
-      price, currency, source_status,
-      COALESCE(checked_at::timestamptz, NOW()), NOW(), COALESCE(checked_at::timestamptz, NOW()) + INTERVAL '6 hours'
-    FROM target_offers
-    ON CONFLICT (offer_id, size_label, size_system) DO UPDATE SET
-      availability_state = EXCLUDED.availability_state,
-      price = EXCLUDED.price, currency = EXCLUDED.currency,
-      source_status = EXCLUDED.source_status, last_checked_at = NOW(),
-      last_seen_at = NOW(), expires_at = NOW() + INTERVAL '6 hours'
-  `;
+      SELECT
+        (SELECT COUNT(DISTINCT offer_id)::int FROM target_offers) AS matched_offers,
+        (SELECT COUNT(*)::int FROM size_upsert) AS persisted_variants
+    ` as Array<{ matched_offers: number; persisted_variants: number }>;
+
+    metrics.push({
+      source,
+      quoteCount,
+      matchedOffers: Number(result[0]?.matched_offers || 0),
+      persistedVariants: Number(result[0]?.persisted_variants || 0),
+    });
+  }
+  return metrics;
 }

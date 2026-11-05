@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { Activity, AlertTriangle, CheckCircle2, Database, KeyRound, RefreshCw, ShieldCheck, XCircle } from "lucide-react";
 
-type Budget = { provider: string; used: number; limit: number; remaining: number };
+type Budget = { provider: string; used: number; limit: number; remaining: number; dailyUsed: number; dailyLimit: number; dailyRemaining: number };
 type Provider = {
   provider: string;
   last_attempt_at?: string | null;
@@ -13,6 +13,11 @@ type Provider = {
   last_error_code?: string | null;
   last_error_message?: string | null;
   last_latency_ms?: number | null;
+  last_result_count?: number;
+  last_size_quote_count?: number;
+  last_size_matched_offers?: number;
+  last_size_persisted_variants?: number;
+  last_size_checked_at?: string | null;
   consecutive_failures?: number;
   disabled_until?: string | null;
   updated_at?: string | null;
@@ -23,7 +28,7 @@ type Diagnostics = {
   checkedAt: string;
   budgets: Budget[];
   providers: Provider[];
-  catalog: { canonicalProducts: number; retailerOffers: number; sizeVariants: number };
+  catalog: { canonicalProducts: number; retailerOffers: number; sizeVariants: number; verifiedSizeSignals: number; availableSizeSignals: number; unknownSizeLabels: number };
   notes?: string[];
 };
 
@@ -33,7 +38,7 @@ function dateLabel(value?: string | null): string {
   return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString();
 }
 function providerLabel(value: string): string {
-  return ({ stockx: "StockX", goat: "GOAT", flightclub: "Flight Club", kickscrew: "Kicks Crew", shopping: "Google Shopping" } as Record<string, string>)[value] || value;
+  return ({ stockx: "StockX", goat: "GOAT", flightclub: "Flight Club", kickscrew: "Kicks Crew", shopping: "Google Shopping", apish: "API.SH" } as Record<string, string>)[value] || value;
 }
 
 export default function ProviderAdminPage() {
@@ -80,7 +85,7 @@ export default function ProviderAdminPage() {
         <div className="admin-heading">
           <div className="admin-kicker"><Activity size={14}/> SYSTEM MONITORING</div>
           <h1>Provider health</h1>
-          <p>Check marketplace connections, monthly safety budgets and the normalized catalog. This page does not expose API keys.</p>
+          <p>Check marketplace connections, daily/monthly safety budgets, size-feed extraction and normalized inventory writes. This page does not expose API keys.</p>
         </div>
 
         <form className="admin-auth-card" onSubmit={loadDiagnostics}>
@@ -118,10 +123,10 @@ export default function ProviderAdminPage() {
           <div className="admin-stat-grid">
             <article className="admin-stat-card"><Database size={17}/><span>Canonical products</span><strong>{data.catalog.canonicalProducts.toLocaleString()}</strong></article>
             <article className="admin-stat-card"><Activity size={17}/><span>Retailer offers</span><strong>{data.catalog.retailerOffers.toLocaleString()}</strong></article>
-            <article className="admin-stat-card"><CheckCircle2 size={17}/><span>Size variants</span><strong>{data.catalog.sizeVariants.toLocaleString()}</strong></article>
+            <article className="admin-stat-card"><CheckCircle2 size={17}/><span>Size variants</span><strong>{data.catalog.sizeVariants.toLocaleString()}</strong><small>{data.catalog.verifiedSizeSignals.toLocaleString()} verified · {data.catalog.availableSizeSignals.toLocaleString()} available · {data.catalog.unknownSizeLabels.toLocaleString()} unknown</small></article>
           </div>
 
-          <div className="admin-section-heading"><h2>Monthly provider budgets</h2><span>Application-side reservations</span></div>
+          <div className="admin-section-heading"><h2>Provider budgets</h2><span>Shared daily and monthly application-side reservations</span></div>
           <div className="admin-budget-grid">
             {data.budgets.map((budget) => {
               const percent = budget.limit > 0 ? Math.min(100, (budget.used / budget.limit) * 100) : 0;
@@ -129,7 +134,8 @@ export default function ProviderAdminPage() {
                 <div className="admin-budget-title"><strong>{budget.provider}</strong><span>{budget.remaining.toLocaleString()} remaining</span></div>
                 <div className="admin-budget-values"><strong>{budget.used.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong><span>of {budget.limit.toLocaleString()}</span></div>
                 <div className="admin-budget-track"><span style={{ width: `${percent}%` }}/></div>
-                <small>{percent.toFixed(1)}% of the configured monthly safety budget reserved</small>
+                <small>{percent.toFixed(1)}% of the monthly safety budget reserved</small>
+                <div className="admin-budget-daily"><span>Today: <strong>{budget.dailyUsed.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong> / {budget.dailyLimit.toLocaleString()}</span><span>{budget.dailyRemaining.toLocaleString(undefined, { maximumFractionDigits: 2 })} daily remaining</span></div>
               </article>;
             })}
           </div>
@@ -140,11 +146,12 @@ export default function ProviderAdminPage() {
             {data.providers.map((provider) => {
               const paused = provider.disabled_until && new Date(provider.disabled_until).getTime() > Date.now();
               const healthy = !paused && Number(provider.consecutive_failures || 0) === 0 && Boolean(provider.last_success_at);
+              const noSizeRows = Boolean(provider.last_size_checked_at) && Number(provider.last_size_quote_count || 0) === 0;
               return <article className="admin-provider-card" key={provider.provider}>
                 <div className="admin-provider-top">
                   <strong>{providerLabel(provider.provider)}</strong>
                   <span className={`admin-status ${paused ? "is-paused" : healthy ? "is-healthy" : "is-unknown"}`}>
-                    {paused ? <><AlertTriangle size={12}/> Cooling down</> : healthy ? <><CheckCircle2 size={12}/> Healthy</> : <><Activity size={12}/> Needs activity / review</>}
+                    {paused ? <><AlertTriangle size={12}/> Cooling down</> : noSizeRows ? <><AlertTriangle size={12}/> Connected · no size rows</> : healthy ? <><CheckCircle2 size={12}/> Connected</> : <><Activity size={12}/> Needs activity / review</>}
                   </span>
                 </div>
                 <div className="admin-provider-meta">
@@ -152,6 +159,11 @@ export default function ProviderAdminPage() {
                   <span>Last attempt<strong>{dateLabel(provider.last_attempt_at)}</strong></span>
                   <span>Latency<strong>{provider.last_latency_ms == null ? "—" : `${provider.last_latency_ms} ms`}</strong></span>
                   <span>Consecutive failures<strong>{Number(provider.consecutive_failures || 0)}</strong></span>
+                  <span>Search records returned<strong>{Number(provider.last_result_count || 0).toLocaleString()}</strong></span>
+                  <span>Last size sync<strong>{dateLabel(provider.last_size_checked_at)}</strong></span>
+                  <span>Size quotes extracted<strong>{Number(provider.last_size_quote_count || 0).toLocaleString()}</strong></span>
+                  <span>Offers matched in Neon<strong>{Number(provider.last_size_matched_offers || 0).toLocaleString()}</strong></span>
+                  <span>Size variants stored<strong>{Number(provider.last_size_persisted_variants || 0).toLocaleString()}</strong></span>
                 </div>
                 {paused && <div className="admin-provider-warning">Paused until {dateLabel(provider.disabled_until)}.</div>}
                 {provider.last_error_message && <div className="admin-provider-error"><XCircle size={13}/><span>{provider.last_error_code || "Provider error"}: {provider.last_error_message}</span></div>}

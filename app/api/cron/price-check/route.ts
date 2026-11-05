@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { normalizeNikeProduct, nikeApiRequest } from "@/lib/nike";
+import { reserveProviderBudget } from "@/lib/provider-budget";
+import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -34,7 +36,13 @@ export async function GET(request: NextRequest) {
 
   let checked = 0;
   let failed = 0;
+  let budgetBlocked = false;
   for (const row of rows) {
+    if (!(await reserveProviderBudget("apish", 1))) {
+      budgetBlocked = true;
+      break;
+    }
+    const providerStartedAt = Date.now();
     try {
       const payload = await nikeApiRequest<unknown>("/nike/v1/product", { url: String(row.product_url) });
       const root = payload as Record<string, unknown>;
@@ -62,10 +70,12 @@ export async function GET(request: NextRequest) {
         `;
       }
       checked += 1;
-    } catch {
+      await recordProviderSuccess("apish", Date.now() - providerStartedAt, 1);
+    } catch (error) {
       failed += 1;
+      await recordProviderFailure("apish", Date.now() - providerStartedAt, error);
     }
   }
 
-  return NextResponse.json({ ok: true, checked, failed, dailyLimit: limit, note: "Automated API.SH price history currently applies only to Nike product URLs. Other retailer watchlist links remain saved but are not automatically checked by this Nike-specific job." });
+  return NextResponse.json({ ok: true, checked, failed, budgetBlocked, requestedLimit: limit, note: "Automated API.SH price history currently applies only to Nike product URLs. Other retailer watchlist links remain saved but are not automatically checked by this Nike-specific job." });
 }

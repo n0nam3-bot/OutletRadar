@@ -5,7 +5,11 @@ A multi-brand product discovery and price-comparison platform built with Next.js
 > **Catalog and inventory limitation:** The catalog is a discovery index, not a complete universal product master. StockX/GOAT/Flight Club/Kicks Crew and Google Shopping can reveal models not previously searched in Outlet Radar, including older/discontinued models when those providers index them. A catalog record is not proof of a current listing or size-level availability. The app does not currently claim physical-store inventory; online listings still require seller checkout verification.
 
 
-## Version 2.1 — Normalized inventory and provider reliability
+## Current release: v2.2.0 — Usage control and size persistence
+
+v2.2 reduces repeated paid requests, fixes the normalized size-write path and adds per-day budget protection. Run the additive migration 003 before deploying; previous watchlists, catalog caches and inventory records are retained.
+
+## Previous release: v2.1 — Normalized inventory and provider reliability
 
 - Added an additive Neon data model: `canonical_products` stores canonical model/colorway/release records; `retailer_offers` stores each individual seller/marketplace listing; `retailer_offer_sizes` stores size labels separately from stock signals; `provider_health` tracks provider response health and circuit-breaker state.
 - Catalog discoveries and exact comparison offers are persisted to the normalized tables while the existing `retailer_search_cache` continues to serve fast shared snapshots. Existing watchlists, price history and legacy caches are preserved.
@@ -32,9 +36,9 @@ Outlet Radar is an independent comparison platform and is not affiliated with or
 - **Grouped product results:** retailer records are combined into one product card when their model identity matches. Missing audience/year/color metadata can be reconciled across listings, while conflicting known year, audience or color attributes keep distinct variants separate.
 - **Inline exact-product comparison:** press Compare offers on a product card to expand that same card with the selected model’s direct retailer listings, each seller’s own title, price, size signals and direct product URL. Provider search results are held to strict model/variant matching; similar models are not displayed as offers.
 - **Compact mobile-first layout:** the search controls are in the opening panel; advanced refinements can be expanded when needed. The old separate Nike search section and Nike store-directory link have been removed.
-- **Free-tier protection:** catalog and retailer lookups are cached in Neon, with shared monthly safety ceilings of 450 PCKT credits and 200 SerpApi requests. There is no arbitrary daily search cap per visitor; after a provider safety budget is reached, existing cached results remain available and new uncached requests to that source pause.
+- **Free-tier protection:** shared provider snapshots are cached independently of audience/year refinements. Atomic daily/monthly safety ceilings are PCKT 12.5 credits/day and 450/month, SerpApi 6/day and 200/month, and API.SH 25/day and 1,000/month. These are site-wide provider guardrails, not per-visitor search limits. Cached results remain available when a source reaches its ceiling.
 - **Watchlist:** save products from the multi-brand catalog. Neon persistence is enabled when `DATABASE_URL` is configured and the schema has been run. The current automated daily price-history job remains Nike-URL-only; other saved retailer links are retained but are not automatically refreshed yet.
-- **Product imagery:** the catalog extracts product artwork from multiple provider image fields and hydrates up to 6 image-less models per uncached browse using cached StockX, GOAT or Flight Club product details. Some source records still do not include an image.
+- **Product imagery:** the catalog extracts product artwork from multiple provider image fields and performs at most one low-cost StockX/GOAT image-detail lookup per uncached catalog browse. Some source records still do not include an image.
 - **Inventory clarity:** catalog filters use attributes actually supplied by sources. Comparison size signals distinguish StockX active asks, GOAT size-availability flags and Flight Club listed new sizes; these are not final checkout guarantees.
 
 ## Version 2.0 changes
@@ -151,25 +155,26 @@ Open `http://localhost:3000`.
 
 ## Database-first catalog behavior
 
-Catalog discovery follows this order: exact-query cache, then the shared normalized `canonical_products` / `retailer_offers` catalog, then external provider discovery only when the product has not already been learned. The normalized catalog uses whole numeric model tokens (so model `1` does not match `14`) and the user's brand, product type, audience and release-year filters. Size, color, price and sale remain result refinements. Existing catalog products remain discoverable even when their previous retailer offers have expired; expired offers are not presented as current retailer listings. Comparing a product is the separate step that attempts to refresh retailer offers.
+Catalog discovery follows this order: exact-query cache, then the shared normalized `canonical_products` / `retailer_offers` catalog, then external provider discovery only when the product has not already been learned. The normalized catalog uses whole numeric model tokens (so model `1` does not match `14`) and the user's brand, product type, audience and release-year filters. Size, color, price and sale remain result refinements. Existing catalog products remain discoverable even when their previous retailer offers have expired; expired offers are not presented as current retailer listings. Comparing a product expands only the retailer URLs already grouped with that selected model; it does not launch another broad marketplace search. Size-level availability is checked separately on demand.
 
 ## Provider health dashboard
 
-After applying `db/migrations/002_catalog_inventory.sql` and deploying v2.1, open `/admin/providers` on the production site. Enter the existing `CRON_SECRET` from Vercel to view application-side PCKT/SerpApi usage reservations, provider success/error/cooldown state, and normalized catalog counts. The secret is sent only in an HTTPS authorization header and is held in page memory; it is not placed in the URL or browser local storage. The underlying endpoint is protected with constant-time token comparison.
+After applying migrations 001, 002 and 003 and deploying v2.2, open `/admin/providers` on the production site. Enter the existing `CRON_SECRET` from Vercel to view application-side daily/monthly API.SH, PCKT and SerpApi reservations, provider success/error/cooldown state, size quote extraction, matched offer and persisted variant counts, and normalized catalog counts. The secret is sent only in an HTTPS authorization header and is held in page memory; it is not placed in the URL or browser local storage. The underlying endpoint is protected with constant-time token comparison.
 
 `/api/health` is a public, sanitized liveness check. It reports whether Neon is configured/connected and which provider keys are configured, but never returns secrets.
 
 The provider budget values in the dashboard are Outlet Radar's own reservations, not the provider's billing ledger. Check each provider account for authoritative quota and billing status. If a provider enters cooldown, the app continues showing other providers and cached/grouped offers where available.
 
-### Upgrade from v2.0.1
+Catalog size lookups are intentionally demand-driven: a size refinement triggers one batched StockX/GOAT lookup for up to 20 catalog products; opening Compare offers can check the selected product, including Flight Club. A product search without a size refinement does not automatically request size inventory for every result. Therefore, zero size variants before any size lookup is not itself an error. After a lookup, use the provider's last-size-sync timestamp, extracted quote count, matched offers and stored variants to identify where data stopped.
 
-1. Run [`db/migrations/002_catalog_inventory.sql`](./db/migrations/002_catalog_inventory.sql) in the same Neon project and branch used by Vercel `DATABASE_URL`.
-2. Upload the v2.1 ZIP through the GitHub ZIP updater, or replace the repository contents with the project files.
-3. Confirm the extraction workflow and then confirm the subsequent Vercel deployment is **Ready**.
-4. Check `/api/health`, then open `/admin/providers` and enter the existing `CRON_SECRET` to view provider budgets and health.
-5. Optional but recommended: replace the repository's existing `.github/workflows/apply-update-zip.yml` with the separately supplied `apply-update-zip-validate.yml`. That workflow extracts the ZIP into a temporary directory, installs dependencies and runs `npm run build` before it changes the working source files. A failed build leaves the current application source intact.
+### Upgrade from v2.1.0 to v2.2.0
 
-No existing tables need to be dropped. The migration is additive and safe to run more than once. Keep `PCKT_API_KEY`, `SERPAPI_API_KEY`, `DATABASE_URL` and `CRON_SECRET` as server-side environment variables. `API_SH_KEY` remains optional for the legacy Nike-only routes.
+1. Run [`db/migrations/003_provider_budget_and_size_diagnostics.sql`](./db/migrations/003_provider_budget_and_size_diagnostics.sql) in the same Neon project and branch used by Vercel `DATABASE_URL`. v2.1 installations already have migrations 001 and 002; do not drop or recreate those tables.
+2. Upload the v2.2 ZIP through the existing GitHub ZIP updater.
+3. Confirm the GitHub Actions validation/extraction workflow succeeds, then confirm the subsequent Vercel deployment is **Ready**.
+4. Open `/admin/providers` and enter the existing `CRON_SECRET`. Confirm daily and monthly budgets appear for API.SH, PCKT and SerpApi, then use Compare offers on a product with StockX/GOAT listings to exercise the size quote path.
+
+Migration 003 is additive and safe to run more than once. It preserves existing monthly PCKT and SerpApi reservations already recorded in `retailer_api_usage`; daily reservations begin when the migration is first used. API.SH usage from before v2.2 was not recorded by the application ledger, so compare API.SH's actual provider dashboard with the new application-side counter. No new environment variables are required. Keep `API_SH_KEY`, `PCKT_API_KEY`, `SERPAPI_API_KEY`, `DATABASE_URL` and `CRON_SECRET` server-side in Vercel. API.SH remains optional; its cache can still serve existing results when the key is absent.
 
 ## Environment variables
 
@@ -326,3 +331,16 @@ This release removes the nearby retailer directory from the customer-facing UI. 
 ## v2.0.1 audience filtering
 
 Retailer offers and size quotes now respect the selected audience. Men and Women views exclude explicit youth/PS/GS variants, and numeric sizes without a known sizing system are not presented as adult sizes. No database migration is required.
+
+## Version 2.2.0 changes
+
+- Added shared per-provider catalog snapshots in Neon: PCKT search results are reused for 24 hours and Google Shopping results for 6 hours, independently of the selected audience and release-year filters. Those refinements now operate on the shared provider snapshot without another provider pull.
+- Reduced automatic image-detail enrichment from as many as six detail calls per browse to at most one low-cost StockX/GOAT detail lookup per uncached catalog search. Flight Club detail is reserved for an explicit size comparison.
+- Changed Compare offers to reuse only retailer URLs already grouped under the selected canonical product. Opening the panel no longer triggers another four PCKT searches plus a SerpApi search, and cannot introduce neighboring product results from a new broad query. The exact-offer cache key is versioned so previously cached broad-search comparisons are not reused.
+- Retired the unused `/api/marketplaces` broad-query endpoint with HTTP 410. The customer flow uses `/api/catalog` for cached discovery and `/api/catalog/offers` for exact-product offers; the deprecated endpoint can no longer bypass the source snapshots.
+- Added atomic daily and monthly provider reservations. Default safety ceilings are PCKT 12.5 credits/day and 450/month; SerpApi 6 searches/day and 200/month; API.SH 25 requests/day and 1,000/month. Limits are shared by catalog, size lookups, Nike searches and scheduled price checks. These are application-side limits, not provider-reported balances.
+- Fixed size-variant persistence to match the exact retailer offer URL first, falling back to provider product ID only when no URL is available. The selected catalog product is upserted before size rows are written. The automatic batched size prefetch now sends each listing's exact URL; the previous request omitted it, which could leave provider IDs unmatched to Neon offers.
+- Added diagnostics for extracted size quotes, matched retailer offers and persisted size variants, plus a last-size-sync timestamp. An HTTP-success response with zero extracted size rows is reported as `no_data`, not a healthy inventory result. The admin page separately counts total size labels, verified availability signals, currently available signals and unknown labels.
+- Corrected GOAT catalog pagination to start at page 1.
+- Added migration `003_provider_budget_and_size_diagnostics.sql`, including the last-size-sync timestamp. No new environment variables are required. v2.2 uses the existing PCKT_API_KEY, SERPAPI_API_KEY, API_SH_KEY, DATABASE_URL and CRON_SECRET.
+

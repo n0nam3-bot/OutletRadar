@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { normalizeNikeProduct, nikeApiRequest, productArray, providerMeta } from "@/lib/nike";
 import { readCatalogMatches, readSearchCache, searchCacheKey, writeSearchCache } from "@/lib/search-cache";
 import { relevantToQuery } from "@/lib/search-match";
+import { reserveProviderBudget } from "@/lib/provider-budget";
+import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 
 export const runtime = "nodejs";
 
@@ -43,12 +45,19 @@ export async function GET(request: NextRequest) {
   }
 
 
+  if (!process.env.API_SH_KEY) {
+    return NextResponse.json({ error: "API_SH_KEY is not configured. Existing cached and catalog results remain available." }, { status: 503 });
+  }
+  if (!(await reserveProviderBudget("apish", 1))) {
+    return NextResponse.json({ error: "The daily or monthly API.SH safety budget has been reached. Existing cached and catalog results remain available; retry after the daily budget resets." }, { status: 429 });
+  }
+  const providerStartedAt = Date.now();
   try {
     // Fetch the broadest product set once. Sale, gender, category and size are all
     // client-side filters so toggling them never consumes another search credit.
     const payload = await nikeApiRequest<unknown>("/nike/v1/search", { q: query, country: "US" });
     const root = payload as Record<string, unknown>;
-    if (root && root.success === false) return NextResponse.json({ error: "The product provider could not complete this search." }, { status: 502 });
+    if (root && root.success === false) throw new Error("The product provider could not complete this search.");
 
     const products = productArray(payload)
       .map(normalizeNikeProduct)
@@ -57,10 +66,12 @@ export async function GET(request: NextRequest) {
       .map(asUnverifiedSearchProduct)
       .slice(0, 100);
 
+    await recordProviderSuccess("apish", Date.now() - providerStartedAt, products.length);
     const meta = providerMeta(payload);
     await writeSearchCache(cacheKey, query, products, meta);
     return NextResponse.json({ products, meta: { ...meta, cached: false, cacheSource: "provider" }, source: "api.sh" });
   } catch (error) {
+    await recordProviderFailure("apish", Date.now() - providerStartedAt, error);
     const message = error instanceof Error ? error.message : "Unexpected product search error.";
     return NextResponse.json({ error: message }, { status: /not configured/i.test(message) ? 503 : 502 });
   }
