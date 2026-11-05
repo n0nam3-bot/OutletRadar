@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { persistCatalogSnapshot } from "@/lib/catalog-store";
+import { getProviderCooldown, recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 import type { CatalogBrowseCategory, CatalogBrowseProduct, CatalogListing, MarketplaceSourceStatus } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -563,6 +565,146 @@ async function readCache(key: string) {
   if (!Array.isArray(products)) return null;
   return { products: products as CatalogBrowseProduct[], sources: Array.isArray(sources) ? sources as Array<MarketplaceSourceStatus & { key?: string }> : [], cachedAt: row.cached_at };
 }
+
+type StoredCatalogRow = {
+  id: string; brand_name: string; category: string; product_title: string;
+  style_code: string | null; release_year: number | null; colorway: string | null;
+  audience: string; image_url: string | null; lowest_price: string | number | null;
+  last_seen_at: string | Date; listings: unknown;
+};
+
+/**
+ * Search the normalized Outlet Radar catalog before asking any external provider.
+ * This is the shared product index: once a model has been discovered, alternate
+ * text queries and future visitors can find it without another catalog API pull.
+ */
+async function searchStoredCatalog(input: {
+  category: CatalogBrowseCategory; brand: string; gender: string;
+  releaseYear?: number; query: string;
+}): Promise<{ products: CatalogBrowseProduct[]; cachedAt: string } | null> {
+  const sql = getDb();
+  if (!sql) return null;
+  const ignored = new Set(["air", "the", "and", "for", "with", "men", "mens", "women", "womens", "kids", "kid", "youth", "unisex", "shoe", "shoes", "sneaker", "sneakers", "footwear"]);
+  const tokens = [...new Set(norm(input.query).split(" ").filter((token) => token && !ignored.has(token)))];
+  const styleQuery = /[a-z]{2,}[^a-z0-9]*\d{2,}/i.test(input.query);
+  const brandTerm = input.brand === "all" ? "" : norm(BRAND_QUERY_TERMS[input.brand] ?? input.brand);
+  const rows = await sql`
+    SELECT
+      cp.id::text AS id, cp.brand_name, cp.category, cp.product_title,
+      cp.style_code, cp.release_year, cp.colorway, cp.audience, cp.image_url,
+      MIN(ro.price) AS lowest_price, cp.last_seen_at,
+      COALESCE(
+        jsonb_agg(
+          jsonb_build_object(
+            'source', ro.source,
+            'retailer', ro.retailer_name,
+            'title', ro.listing_title,
+            'url', ro.listing_url,
+            'providerProductId', ro.provider_product_id,
+            'styleCode', ro.style_code,
+            'imageUrl', ro.image_url,
+            'price', ro.price,
+            'originalPrice', ro.original_price,
+            'currency', ro.currency,
+            'color', ro.colorway,
+            'sizes', COALESCE((SELECT jsonb_agg(DISTINCT size_row.size_label) FROM retailer_offer_sizes size_row WHERE size_row.offer_id = ro.id), '[]'::jsonb),
+            'gender', ro.audience,
+            'releaseYear', ro.release_year,
+            'onSale', CASE WHEN ro.metadata ? 'onSale' THEN (ro.metadata->>'onSale')::boolean ELSE false END,
+            'lastCheckedAt', ro.last_checked_at
+          )
+        ) FILTER (WHERE ro.id IS NOT NULL),
+        '[]'::jsonb
+      ) AS listings
+    FROM canonical_products cp
+    LEFT JOIN retailer_offers ro ON ro.product_id = cp.id AND (ro.expires_at IS NULL OR ro.expires_at > NOW())
+    WHERE (${input.category} = 'all' OR cp.category = ${input.category})
+      AND (${input.brand} = 'all' OR lower(cp.brand_name) = ${brandTerm})
+      AND (${input.gender} = 'all' OR lower(cp.audience) = ${input.gender} OR lower(cp.audience) = 'unknown' OR (${input.gender} IN ('men','women') AND lower(cp.audience) = 'unisex'))
+      AND (${input.releaseYear ?? null}::integer IS NULL OR cp.release_year = ${input.releaseYear ?? null} OR cp.release_year IS NULL)
+      AND (
+        jsonb_array_length(${JSON.stringify(tokens)}::jsonb) = 0
+        OR (${styleQuery} AND lower(regexp_replace(COALESCE(cp.style_code,''), '[^a-z0-9]+', '', 'g')) LIKE '%' || regexp_replace(lower(${input.query}), '[^a-z0-9]+', '', 'g') || '%')
+        OR (
+          NOT EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(${JSON.stringify(tokens)}::jsonb) AS query_token(value)
+            WHERE NOT (
+              CASE
+                WHEN query_token.value ~ '^\d+(\.\d+)?[a-z]?$' THEN
+                  (' ' || regexp_replace(lower(cp.product_title), '[^a-z0-9.]+', ' ', 'g') || ' ') LIKE '% ' || query_token.value || ' %'
+                  OR (' ' || regexp_replace(lower(COALESCE(cp.metadata->>'modelKey','')), '[^a-z0-9.]+', ' ', 'g') || ' ') LIKE '% ' || query_token.value || ' %'
+                  OR (query_token.value ~ '^(19|20)\d{2}$' AND cp.release_year = query_token.value::integer)
+                ELSE lower(cp.product_title) LIKE '%' || query_token.value || '%'
+                  OR lower(COALESCE(cp.metadata->>'modelKey','')) LIKE '%' || query_token.value || '%'
+                  OR (${styleQuery} AND lower(COALESCE(cp.style_code,'')) LIKE '%' || query_token.value || '%')
+              END
+            )
+          )
+        )
+      )
+    GROUP BY cp.id
+    ORDER BY cp.last_seen_at DESC
+    LIMIT 72
+  ` as StoredCatalogRow[];
+
+  if (!rows.length) return null;
+  const products: CatalogBrowseProduct[] = rows.map((row) => {
+    const rawListings = typeof row.listings === "string" ? JSON.parse(row.listings) : row.listings;
+    const listings: CatalogListing[] = [];
+    for (const value of (Array.isArray(rawListings) ? rawListings : [])) {
+      const item = obj(value);
+      if (!item) continue;
+      const sourceValue = str(item.source);
+      if (!["stockx", "goat", "flightclub", "kickscrew", "shopping"].includes(sourceValue)) continue;
+      const url = str(item.url);
+      if (!url) continue;
+      const sizesRaw = Array.isArray(item.sizes) ? item.sizes : [];
+      const yearCandidate = item.releaseYear ?? row.release_year;
+      const year = yearCandidate == null ? undefined : Number(yearCandidate);
+      listings.push({
+        source: sourceValue as CatalogListing["source"],
+        retailer: str(item.retailer, sourceValue),
+        title: str(item.title, row.product_title),
+        url,
+        providerProductId: str(item.providerProductId) || undefined,
+        styleCode: str(item.styleCode, row.style_code || "") || undefined,
+        imageUrl: str(item.imageUrl) || undefined,
+        price: num(item.price),
+        originalPrice: num(item.originalPrice),
+        currency: str(item.currency, "USD"),
+        color: str(item.color, row.colorway || "") || undefined,
+        sizes: sizesRaw.filter((size): size is string => typeof size === "string"),
+        gender: str(item.gender, row.audience) as CatalogListing["gender"],
+        releaseYear: year !== undefined && Number.isInteger(year) && year >= 1980 && year <= 2035 ? year : undefined,
+        onSale: typeof item.onSale === "boolean" ? item.onSale : undefined,
+      });
+    }
+    const sizeLabels = [...new Set(listings.flatMap((listing) => listing.sizes ?? []))];
+    const sourceNames = [...new Set(listings.map((listing) => listing.retailer))];
+    const knownGender = (["Men", "Women", "Kids", "Unisex"] as const).find((value) => value.toLowerCase() === String(row.audience || "").toLowerCase());
+    const category = ["sneakers", "apparel", "accessories", "all"].includes(row.category) ? row.category as CatalogBrowseCategory : input.category;
+    return {
+      id: row.id,
+      title: row.product_title,
+      brand: row.brand_name,
+      category,
+      styleCode: row.style_code || undefined,
+      imageUrl: row.image_url || listings.find((listing) => listing.imageUrl)?.imageUrl,
+      sources: sourceNames,
+      listings,
+      price: row.lowest_price == null ? undefined : Number(row.lowest_price),
+      currency: listings.find((listing) => listing.currency)?.currency || "USD",
+      color: row.colorway || undefined,
+      colors: row.colorway ? [row.colorway] : [],
+      sizes: sizeLabels,
+      gender: knownGender || "Unknown",
+      releaseYear: row.release_year || undefined,
+      onSale: listings.some((listing) => listing.onSale === true),
+    };
+  });
+  return { products, cachedAt: new Date(rows[0].last_seen_at).toISOString() };
+}
 async function writeCache(key: string, query: string, products: CatalogBrowseProduct[], sources: Array<MarketplaceSourceStatus & { key?: string }>) {
   const sql = getDb();
   if (!sql) return;
@@ -622,7 +764,7 @@ async function saveProviderDetail(source: "stockx" | "goat" | "flightclub", id: 
 async function enrichMissingCatalogImages(products: CatalogBrowseProduct[]) {
   const missing = products.filter((product) => !product.imageUrl && (product.listings ?? []).some((listing) =>
     ["stockx", "goat", "flightclub"].includes(listing.source) && listing.providerProductId,
-  )).slice(0, 16);
+  )).slice(0, 6);
 
   for (const product of missing) {
     const candidates = (product.listings ?? [])
@@ -632,13 +774,17 @@ async function enrichMissingCatalogImages(products: CatalogBrowseProduct[]) {
     const listing = candidates[0];
     if (!listing || !["stockx", "goat", "flightclub"].includes(listing.source) || !listing.providerProductId) continue;
     const source = listing.source as "stockx" | "goat" | "flightclub";
+    let providerStartedAt: number | null = null;
     try {
       let detail = await cachedProviderDetail(source, listing.providerProductId);
       if (!detail) {
+        const cooldown = await getProviderCooldown(source);
+        if (cooldown.paused) continue;
         const apiKey = process.env.PCKT_API_KEY;
         if (!apiKey) continue;
         const units = source === "flightclub" ? 1 : 0.4;
         if (!(await reserveBudget("pckt", units, PCKT_MONTHLY_BUDGET))) continue;
+        providerStartedAt = Date.now();
         await waitForPcktSlot();
         const url = source === "flightclub"
           ? new URL("https://api.pckt.sh/v1/flightclub/product")
@@ -651,6 +797,7 @@ async function enrichMissingCatalogImages(products: CatalogBrowseProduct[]) {
           url.searchParams.set("market", "US");
         }
         const payload = await fetchJson(url, { Authorization: `Bearer ${apiKey}`, Accept: "application/json" });
+        await recordProviderSuccess(source, Date.now() - providerStartedAt);
         detail = productDetailRecord(payload);
         // Cache a sentinel too, so products without upstream artwork don't consume
         // another request every time the same 12-hour catalog is rediscovered.
@@ -666,7 +813,8 @@ async function enrichMissingCatalogImages(products: CatalogBrowseProduct[]) {
       }
       if ((product.gender === "Unknown" || !product.gender) && colorInfo.gender !== "Unknown") product.gender = colorInfo.gender;
       if (!product.sizes?.length && colorInfo.sizes?.length) product.sizes = colorInfo.sizes;
-    } catch {
+    } catch (error) {
+      if (providerStartedAt !== null) await recordProviderFailure(source, Date.now() - providerStartedAt, error);
       // A missing image is cosmetic; never fail product discovery when detail enrichment fails.
     }
   }
@@ -708,10 +856,32 @@ export async function GET(request: NextRequest) {
     const cached = await readCache(cacheKey);
     const newlyConfiguredSource = cached?.sources.some((source) => source.status === "not_configured" && ((source.key !== "shopping" && Boolean(pcktKey)) || (source.key === "shopping" && Boolean(serpKey))));
     if (cached && !newlyConfiguredSource) {
+      try { await persistCatalogSnapshot(cached.products); } catch { /* normalized store is an additive index; cache results remain usable */ }
       return NextResponse.json({ category, brand: brandValue, gender: genderValue, releaseYear: releaseYear ?? null, products: cached.products, sources: cached.sources, cached: true, cachedAt: cached.cachedAt, cacheHours: CACHE_HOURS, note: "Catalog names are discovery records, not proof of current stock." });
     }
   } catch {
     return NextResponse.json({ error: "Could not read the retailer catalog cache in Neon. Confirm that retailer_search_cache exists and that DATABASE_URL points to the intended Neon branch." }, { status: 503 });
+  }
+
+  // After an exact-query cache miss, search Outlet Radar's normalized catalog.
+  // A product already discovered by any visitor is reusable by every visitor;
+  // only genuinely new catalog discovery proceeds to external providers.
+  try {
+    const stored = await searchStoredCatalog({ category, brand: brandValue, gender: genderValue, releaseYear, query: userQuery });
+    if (stored?.products.length) {
+      const storedSources = [{ key: "catalog", name: "Outlet Radar catalog", status: "success" as const, results: stored.products.length, message: "Loaded from Outlet Radar's shared catalog. Retailer offer details are refreshed when compared." }];
+      // Read-through cache the database result for this exact filter combination.
+      try { await writeCache(cacheKey, `catalog-db: ${category} / ${brandValue} / ${userQuery}`, stored.products, storedSources); } catch { /* database catalog results remain usable */ }
+      return NextResponse.json({
+        category, brand: brandValue, gender: genderValue, releaseYear: releaseYear ?? null,
+        query: userQuery, products: stored.products,
+        sources: storedSources,
+        cached: true, cacheSource: "normalized_catalog", cachedAt: stored.cachedAt,
+        note: "These are saved product records. They do not establish current retailer stock or selected-size checkout availability.",
+      });
+    }
+  } catch {
+    // A normalized-catalog read failure must not prevent fallback to provider discovery.
   }
 
   // Search terms are provider discovery inputs. Gender, size, color, price and
@@ -728,30 +898,42 @@ export async function GET(request: NextRequest) {
       sources.push({ key: source.key, name: source.name, status: "not_configured", results: 0, message: "Add PCKT_API_KEY in Vercel to enable marketplace catalog discovery." });
       continue;
     }
+    const cooldown = await getProviderCooldown(source.key);
+    if (cooldown.paused) {
+      sources.push({ key: source.key, name: source.name, status: "cooldown", results: 0, message: `Temporarily paused after repeated provider errors until ${cooldown.disabledUntil}. Cached catalog records remain available.` });
+      continue;
+    }
     if (!(await reserveBudget("pckt", source.credits, PCKT_MONTHLY_BUDGET))) {
       sources.push({ key: source.key, name: source.name, status: "budget_reached", results: 0, message: "Monthly PCKT safety budget reached. Existing Neon catalog results remain available." });
       continue;
     }
+    const providerStartedAt = Date.now();
     try {
       await waitForPcktSlot();
       const url = new URL(`https://api.pckt.sh${source.path}`);
       Object.entries(source.params(searchTerm || "sneakers")).forEach(([key, value]) => url.searchParams.set(key, value));
       const payload = await fetchJson(url, { Authorization: `Bearer ${pcktKey}`, Accept: "application/json" });
+      await recordProviderSuccess(source.key, Date.now() - providerStartedAt);
       const found = records(payload).map((item) => normalizePckt(source.key, item, brandValue, category, userQuery)).filter((item): item is InternalListing => !!item)
         .filter((item) => (!releaseYear || !item.releaseYear || item.releaseYear === releaseYear))
         .filter((item) => genderValue === "all" || item.gender === "Unknown" || item.gender?.toLowerCase() === genderValue || (genderValue === "men" || genderValue === "women") && item.gender === "Unisex");
       listings.push(...found);
       sources.push({ key: source.key, name: source.name, status: "success", results: found.length, message: found.length ? `${found.length} catalog record(s) discovered. Current size-level availability is not implied.` : "No matching catalog entries were returned for this brand/type combination." });
     } catch (error) {
+      await recordProviderFailure(source.key, Date.now() - providerStartedAt, error);
       sources.push({ key: source.key, name: source.name, status: "error", results: 0, message: error instanceof Error ? error.message : "Catalog provider request failed." });
     }
   }
 
   if (!serpKey) {
     sources.push({ key: "shopping", name: "Google Shopping merchants", status: "not_configured", results: 0, message: "Add SERPAPI_API_KEY to discover online retailer listings, including Foot Locker when returned." });
+  } else if ((await getProviderCooldown("shopping")).paused) {
+    const cooldown = await getProviderCooldown("shopping");
+    sources.push({ key: "shopping", name: "Google Shopping merchants", status: "cooldown", results: 0, message: `Temporarily paused after repeated provider errors${cooldown.disabledUntil ? ` until ${cooldown.disabledUntil}` : ""}.` });
   } else if (!(await reserveBudget("serpapi", 1, SERPAPI_MONTHLY_BUDGET))) {
     sources.push({ key: "shopping", name: "Google Shopping merchants", status: "budget_reached", results: 0, message: "Monthly SerpApi safety budget reached. Cached catalog entries remain available." });
   } else {
+    const providerStartedAt = Date.now();
     try {
       const url = new URL("https://serpapi.com/search.json");
       const shoppingQuery = category === "sneakers" || category === "all" ? (searchTerm || "sneakers") : searchTerm;
@@ -761,6 +943,7 @@ export async function GET(request: NextRequest) {
       url.searchParams.set("hl", "en");
       url.searchParams.set("api_key", serpKey);
       const payload = obj(await fetchJson(url)) ?? {};
+      await recordProviderSuccess("shopping", Date.now() - providerStartedAt);
       const shopping = Array.isArray(payload.shopping_results) ? payload.shopping_results : [];
       const found = shopping.map(obj).filter((item): item is Record<string, unknown> => !!item)
         .map((item) => normalizeShopping(item, brandValue, category, userQuery)).filter((item): item is InternalListing => !!item)
@@ -769,11 +952,13 @@ export async function GET(request: NextRequest) {
       listings.push(...found);
       sources.push({ key: "shopping", name: "Google Shopping merchants", status: "success", results: found.length, message: found.length ? `${found.length} merchant listing(s) discovered. Exact size and stock must be checked with the seller.` : "No matching merchant catalog entries were returned." });
     } catch (error) {
+      await recordProviderFailure("shopping", Date.now() - providerStartedAt, error);
       sources.push({ key: "shopping", name: "Google Shopping merchants", status: "error", results: 0, message: error instanceof Error ? error.message : "Google Shopping catalog request failed." });
     }
   }
 
   const products = await enrichMissingCatalogImages(groupListings(listings));
+  try { await persistCatalogSnapshot(products); } catch { /* provider cache remains usable if the normalized inventory index is unavailable */ }
   const cacheQuery = `catalog: ${category} / ${brandValue} / ${userQuery || "all models"}`;
   try { await writeCache(cacheKey, cacheQuery, products, sources); }
   catch { /* keep discovery results visible if a nonessential cache write fails */ }

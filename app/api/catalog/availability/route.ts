@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { filterSizeQuotesForAudience, inferSizeSystem } from "@/lib/audience";
+import { persistOfferSizeQuotes } from "@/lib/catalog-store";
+import { getProviderCooldown, recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 import type { MarketplaceSizeQuote } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -11,7 +13,7 @@ const PCKT_MONTHLY_BUDGET = 450;
 type QuoteSource = "stockx" | "goat" | "flightclub";
 type ListingRef = { source: QuoteSource; providerProductId: string; retailer: string; catalogProductId: string; gender?: string };
 type ProductRef = { catalogProductId: string; listings: ListingRef[]; needsImage: boolean; audience: string };
-type CachedDetail = { quotes: MarketplaceSizeQuote[]; imageUrl?: string; colors?: string[]; gender?: string };
+type CachedDetail = { quotes: MarketplaceSizeQuote[]; imageUrl?: string; colors?: string[]; gender?: string; checkedAt?: string };
 
 function obj(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -102,11 +104,12 @@ async function readCachedData(source: QuoteSource, id: string): Promise<CachedDe
   const sql = getDb();
   if (!sql) return null;
   const key = cacheKey(source, id);
-  const rows = await sql`SELECT results_json FROM retailer_search_cache WHERE cache_key = ${key} AND expires_at > now() LIMIT 1` as Array<{ results_json: unknown }>;
+  const rows = await sql`SELECT results_json, cached_at FROM retailer_search_cache WHERE cache_key = ${key} AND expires_at > now() LIMIT 1` as Array<{ results_json: unknown; cached_at: string | Date }>;
   const raw = rows[0]?.results_json;
+  const checkedAt = rows[0]?.cached_at ? new Date(rows[0].cached_at).toISOString() : undefined;
   if (!raw) return null;
   const value = typeof raw === "string" ? JSON.parse(raw) : raw;
-  if (Array.isArray(value)) return { quotes: value as MarketplaceSizeQuote[] }; // Read older v1 cache entries safely.
+  if (Array.isArray(value)) return { quotes: value as MarketplaceSizeQuote[], checkedAt }; // Read older v1 cache entries safely.
   const record = obj(value);
   if (!record) return null;
   return {
@@ -114,6 +117,7 @@ async function readCachedData(source: QuoteSource, id: string): Promise<CachedDe
     imageUrl: typeof record.imageUrl === "string" ? record.imageUrl : undefined,
     colors: Array.isArray(record.colors) ? record.colors.filter((color): color is string => typeof color === "string") : undefined,
     gender: typeof record.gender === "string" ? record.gender : undefined,
+    checkedAt,
   };
 }
 async function writeCachedData(source: QuoteSource, id: string, detail: CachedDetail) {
@@ -331,15 +335,20 @@ export async function POST(request: NextRequest) {
       } catch { uncached.push(listing); }
     }
     if (uncached.length) {
-      if (!(await reservePcktBudget(0.4))) {
+      const cooldown = await getProviderCooldown(source);
+      if (cooldown.paused) {
+        sources.push({ name, status: "cooldown", message: `Temporarily paused after repeated provider errors until ${cooldown.disabledUntil}. Cached size data remains available.` });
+      } else if (!(await reservePcktBudget(0.4))) {
         sources.push({ name, status: "budget_reached", message: "Monthly PCKT safety budget reached; showing cached size data only." });
       } else {
+        const providerStartedAt = Date.now();
         try {
           await waitForPcktSlot();
           const url = new URL(`https://api.pckt.sh/v1/catalog/${source}/prices`);
           url.searchParams.set("ids", uncached.map((item) => item.providerProductId).join(","));
           url.searchParams.set("market", "US");
           const payload = await fetchJson(url, apiKey);
+          await recordProviderSuccess(source, Date.now() - providerStartedAt);
           for (const listing of uncached) {
             const quotes = source === "stockx"
               ? makeStockxQuotes(payload, listing.retailer, listing.providerProductId, listing.gender)
@@ -350,6 +359,7 @@ export async function POST(request: NextRequest) {
           }
           sources.push({ name, status: "success", message: `Loaded size-level marketplace pricing for ${uncached.length} product record(s).` });
         } catch (error) {
+          await recordProviderFailure(source, Date.now() - providerStartedAt, error);
           sources.push({ name, status: "error", message: error instanceof Error ? error.message : "Size lookup failed." });
         }
       }
@@ -362,6 +372,7 @@ export async function POST(request: NextRequest) {
   // It is a 1-credit call per selected product, so it is only used for explicit comparisons.
   for (const listing of uniqueBySource.flightclub.slice(0, 3)) {
     const name = "Flight Club";
+    let providerStartedAt: number | null = null;
     try {
       const cached = await readCachedData("flightclub", listing.providerProductId);
       if (cached) {
@@ -369,21 +380,29 @@ export async function POST(request: NextRequest) {
         sources.push({ name, status: "cached", message: "Flight Club size options and product image reused from Neon." });
         continue;
       }
+      const cooldown = await getProviderCooldown("flightclub");
+      if (cooldown.paused) {
+        sources.push({ name, status: "cooldown", message: `Temporarily paused after repeated provider errors until ${cooldown.disabledUntil}.` });
+        continue;
+      }
       if (!(await reservePcktBudget(1))) {
         sources.push({ name, status: "budget_reached", message: "Monthly PCKT safety budget reached; no Flight Club detail request was sent." });
         continue;
       }
+      providerStartedAt = Date.now();
       await waitForPcktSlot();
       const url = new URL("https://api.pckt.sh/v1/flightclub/product");
       url.searchParams.set("id", listing.providerProductId);
       url.searchParams.set("countryCode", "US");
       url.searchParams.set("currencyCode", "USD");
       const payload = await fetchJson(url, apiKey);
+      await recordProviderSuccess("flightclub", Date.now() - (providerStartedAt ?? Date.now()));
       const detail = makeFlightClubDetail(payload, listing.retailer, listing.gender);
       quoteMap.set(`flightclub:${listing.providerProductId}`, detail);
       try { await writeCachedData("flightclub", listing.providerProductId, detail); } catch { /* keep live results */ }
       sources.push({ name, status: "success", message: `Loaded ${detail.quotes.length} explicitly available new size option(s).` });
     } catch (error) {
+      if (providerStartedAt !== null) await recordProviderFailure("flightclub", Date.now() - providerStartedAt, error);
       sources.push({ name, status: "error", message: error instanceof Error ? error.message : "Flight Club product lookup failed." });
     }
   }
@@ -431,6 +450,20 @@ export async function POST(request: NextRequest) {
       });
     }
   }
+
+  try {
+    const persistedQuotes: Array<{ source: QuoteSource; providerProductId: string; quotes: MarketplaceSizeQuote[]; checkedAt?: string }> = [];
+    for (const listing of allListings) {
+      const detail = quoteMap.get(`${listing.source}:${listing.providerProductId}`);
+      if (detail) persistedQuotes.push({
+        source: listing.source,
+        providerProductId: listing.providerProductId,
+        quotes: detail.quotes,
+        checkedAt: detail.checkedAt,
+      });
+    }
+    await persistOfferSizeQuotes(persistedQuotes);
+  } catch { /* size feed results remain available in the response/cache if normalized persistence fails */ }
 
   const checks = products.map((product) => {
     const details = product.listings.map((listing) => quoteMap.get(`${listing.source}:${listing.providerProductId}`)).filter((value): value is CachedDetail => !!value);

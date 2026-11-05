@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { filterOfferSizeLabels, inferListingAudience, isOfferAllowedForAudience } from "@/lib/audience";
+import { persistCatalogSnapshot } from "@/lib/catalog-store";
+import { getProviderCooldown, recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 import type { CatalogBrowseProduct, CatalogListing, MarketplaceOffer, MarketplaceProvider, MarketplaceSourceStatus } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -241,6 +243,8 @@ function normalizePckt(source: PcktSource, item: Record<string, unknown>, target
   const listingGender = inferListingAudience(str(item.gender, item.gender_name, item.audience, item.size_category, item.sizeCategory), title, sizes);
   const offer: MarketplaceOffer = {
     id: `${source}:${str(item.id, item.product_id, item.productId, item.slug, url)}`,
+    providerProductId: str(item.id, item.product_id, item.productId, item.slug) || undefined,
+    condition: str(item.condition, item.product_condition, item.state) || "Unknown",
     source, retailer: source === "stockx" ? "StockX" : source === "goat" ? "GOAT" : source === "flightclub" ? "Flight Club" : "Kicks Crew",
     channel: "online", title, url, imageUrl: imageUrlFromItem(item), styleCode: styleCode(item) || undefined,
     brand: brand || undefined, gender: listingGender === "unknown" ? undefined : listingGender, sizes: sizes.length ? sizes : undefined,
@@ -259,7 +263,8 @@ function normalizeShopping(item: Record<string, unknown>, target: ExactTarget): 
   const sizes = sizeLabels(item);
   const listingGender = inferListingAudience(str(item.gender, item.gender_name, item.audience, item.size_category, item.sizeCategory), title, sizes);
   const offer: MarketplaceOffer = {
-    id: `shopping:${str(item.product_id, item.position, title)}:${retailer}`, source: "shopping", retailer,
+    id: `shopping:${str(item.product_id, item.position, title)}:${retailer}`, providerProductId: str(item.product_id, item.gtin, item.sku) || undefined,
+    condition: str(item.condition, item.product_condition) || "Unknown", source: "shopping", retailer,
     channel: "online", title, url, imageUrl: imageUrlFromItem(item), styleCode: styleCode(item) || undefined,
     brand: str(item.brand, item.manufacturer) || undefined, gender: listingGender === "unknown" ? undefined : listingGender,
     sizes: sizes.length ? sizes : undefined, price: num(item.extracted_price, item.price),
@@ -273,7 +278,8 @@ function seedListingOffer(listing: CatalogListing, target: ExactTarget, index: n
   if (!url) return null;
   return {
     id: `catalog:${listing.source}:${createHash("sha1").update(url).digest("hex").slice(0, 12)}:${index}`,
-    source: listing.source, retailer: listing.retailer, channel: "online", title: listing.title || target.title, url,
+    source: listing.source, providerProductId: listing.providerProductId, condition: "Unknown",
+    retailer: listing.retailer, channel: "online", title: listing.title || target.title, url,
     imageUrl: listing.imageUrl, styleCode: target.styleCode, brand: target.brand,
     gender: inferListingAudience(listing.gender, listing.title || target.title, listing.sizes) === "unknown" ? undefined : inferListingAudience(listing.gender, listing.title || target.title, listing.sizes),
     color: listing.color, sizes: listing.sizes,
@@ -340,7 +346,7 @@ function buildExactQuery(target: ExactTarget): string {
 
 export async function POST(request: NextRequest) {
   const sql = getDb();
-  if (!sql) return NextResponse.json({ error: "Neon is required to cache exact-product comparisons." }, { status: 503 });
+  const persistenceAvailable = Boolean(sql);
   const body = obj(await request.json().catch(() => ({})));
   const raw = obj(body?.product);
   const title = str(raw?.title);
@@ -359,6 +365,7 @@ export async function POST(request: NextRequest) {
       source: str(item.source) as OfferSource,
       retailer: str(item.retailer, item.source), title: str(item.title) || undefined,
       url: str(item.url), providerProductId: str(item.providerProductId) || undefined,
+      styleCode: str(item.styleCode) || undefined,
       imageUrl: str(item.imageUrl) || undefined,
       price: num(item.price), originalPrice: num(item.originalPrice), currency: str(item.currency, "USD"),
       color: str(item.color) || undefined,
@@ -375,7 +382,18 @@ export async function POST(request: NextRequest) {
   try {
     const cached = await readCache(cacheKey);
     const newlyConfigured = cached?.sources.some((source) => source.status === "not_configured" && ((source.key === "shopping" && Boolean(process.env.SERPAPI_API_KEY)) || (source.key !== "shopping" && Boolean(process.env.PCKT_API_KEY))));
-    if (cached && !newlyConfigured) return NextResponse.json({ productId: target.id, offers: cached.offers, sources: cached.sources, cached: true, cachedAt: cached.cachedAt, cacheHours: CACHE_HOURS });
+    if (cached && !newlyConfigured) {
+      const cachedProduct: CatalogBrowseProduct = {
+        id: target.id || cacheKey.slice(0, 20), title: target.title, brand: target.brand,
+        category: (["sneakers", "apparel", "accessories", "all"].includes(target.category) ? target.category : "all") as CatalogBrowseProduct["category"],
+        styleCode: target.styleCode, imageUrl: target.listings.find((listing) => listing.imageUrl)?.imageUrl,
+        sources: [...new Set(target.listings.map((listing) => listing.retailer))], listings: target.listings,
+        color: target.color, colors: target.colors, gender: (target.gender as CatalogBrowseProduct["gender"]) || "Unknown",
+        releaseYear: target.releaseYear,
+      };
+      try { await persistCatalogSnapshot([cachedProduct], cached.offers); } catch { /* backfill is best-effort */ }
+      return NextResponse.json({ productId: target.id, offers: cached.offers, sources: cached.sources, cached: true, cachedAt: cached.cachedAt, cacheHours: CACHE_HOURS });
+    }
   } catch {
     return NextResponse.json({ error: "Could not read the exact-product comparison cache. Confirm retailer_search_cache exists in the Neon branch used by DATABASE_URL." }, { status: 503 });
   }
@@ -385,21 +403,31 @@ export async function POST(request: NextRequest) {
   const pcktKey = process.env.PCKT_API_KEY;
   if (!pcktKey) {
     for (const source of sources) statuses.push({ key: source.key, name: source.name, status: "not_configured", results: 0, message: "PCKT_API_KEY is not configured. Existing grouped retailer listings are still displayed." });
+  } else if (!persistenceAvailable) {
+    for (const source of sources) statuses.push({ key: source.key, name: source.name, status: "error", results: 0, message: "Neon is temporarily unavailable, so live provider pulls are paused to avoid untracked API usage. Existing catalog listings remain available." });
   } else {
     for (const source of sources) {
+      const cooldown = await getProviderCooldown(source.key);
+      if (cooldown.paused) {
+        statuses.push({ key: source.key, name: source.name, status: "cooldown", results: 0, message: `Temporarily paused after repeated provider errors until ${cooldown.disabledUntil}. Existing offers remain visible.` });
+        continue;
+      }
       if (!(await reserveBudget("pckt", source.credits, PCKT_MONTHLY_BUDGET))) {
         statuses.push({ key: source.key, name: source.name, status: "budget_reached", results: 0, message: "Monthly PCKT safety budget reached; grouped catalog listings remain available." });
         continue;
       }
+      const providerStartedAt = Date.now();
       try {
         await waitForPcktSlot();
         const url = new URL(`https://api.pckt.sh${source.path}`);
         Object.entries(source.params(query)).forEach(([key, value]) => url.searchParams.set(key, value));
         const payload = await fetchJson(url, { Authorization: `Bearer ${pcktKey}`, Accept: "application/json" });
+        await recordProviderSuccess(source.key, Date.now() - providerStartedAt);
         const found = records(payload).map((item) => normalizePckt(source.key, item, target)).filter((offer): offer is MarketplaceOffer => !!offer);
         offers.push(...found);
         statuses.push({ key: source.key, name: source.name, status: "success", results: found.length, message: found.length ? `${found.length} exact-model listing(s) passed the selected product match checks.` : "No listing passed the exact model, style and variant checks." });
       } catch (error) {
+        await recordProviderFailure(source.key, Date.now() - providerStartedAt, error);
         statuses.push({ key: source.key, name: source.name, status: "error", results: 0, message: error instanceof Error ? error.message : "Provider request failed." });
       }
     }
@@ -407,17 +435,24 @@ export async function POST(request: NextRequest) {
 
   const serpKey = process.env.SERPAPI_API_KEY;
   if (!serpKey) statuses.push({ key: "shopping", name: "Google Shopping merchants", status: "not_configured", results: 0, message: "SERPAPI_API_KEY is not configured. Grouped marketplace listings remain available." });
-  else if (!(await reserveBudget("serpapi", 1, SERPAPI_MONTHLY_BUDGET))) statuses.push({ key: "shopping", name: "Google Shopping merchants", status: "budget_reached", results: 0, message: "Monthly SerpApi safety budget reached; grouped catalog listings remain available." });
+  else if (!persistenceAvailable) statuses.push({ key: "shopping", name: "Google Shopping merchants", status: "error", results: 0, message: "Neon is temporarily unavailable, so live provider pulls are paused to avoid untracked API usage." });
+  else if ((await getProviderCooldown("shopping")).paused) {
+    const cooldown = await getProviderCooldown("shopping");
+    statuses.push({ key: "shopping", name: "Google Shopping merchants", status: "cooldown", results: 0, message: `Temporarily paused after repeated provider errors${cooldown.disabledUntil ? ` until ${cooldown.disabledUntil}` : ""}.` });
+  } else if (!(await reserveBudget("serpapi", 1, SERPAPI_MONTHLY_BUDGET))) statuses.push({ key: "shopping", name: "Google Shopping merchants", status: "budget_reached", results: 0, message: "Monthly SerpApi safety budget reached; grouped catalog listings remain available." });
   else {
+    const providerStartedAt = Date.now();
     try {
       const url = new URL("https://serpapi.com/search.json");
       url.searchParams.set("engine", "google_shopping"); url.searchParams.set("q", query); url.searchParams.set("gl", "us"); url.searchParams.set("hl", "en"); url.searchParams.set("api_key", serpKey);
       const payload = obj(await fetchJson(url)) ?? {};
+      await recordProviderSuccess("shopping", Date.now() - providerStartedAt);
       const shopping = Array.isArray(payload.shopping_results) ? payload.shopping_results : [];
       const found = shopping.map(obj).filter((item): item is Record<string, unknown> => !!item).map((item) => normalizeShopping(item, target)).filter((offer): offer is MarketplaceOffer => !!offer);
       offers.push(...found);
       statuses.push({ key: "shopping", name: "Google Shopping merchants", status: "success", results: found.length, message: found.length ? `${found.length} merchant listing(s) passed the exact model match checks.` : "No merchant listing passed the exact product match checks." });
     } catch (error) {
+      await recordProviderFailure("shopping", Date.now() - providerStartedAt, error);
       statuses.push({ key: "shopping", name: "Google Shopping merchants", status: "error", results: 0, message: error instanceof Error ? error.message : "Shopping request failed." });
     }
   }
@@ -444,6 +479,15 @@ export async function POST(request: NextRequest) {
     if (!unique.has(key)) unique.set(key, offer);
   }
   const results = [...unique.values()].sort((a, b) => (a.price ?? Number.MAX_SAFE_INTEGER) - (b.price ?? Number.MAX_SAFE_INTEGER)).slice(0, 40);
+  const canonicalProduct: CatalogBrowseProduct = {
+    id: target.id || cacheKey.slice(0, 20), title: target.title, brand: target.brand,
+    category: (["sneakers", "apparel", "accessories", "all"].includes(target.category) ? target.category : "all") as CatalogBrowseProduct["category"],
+    styleCode: target.styleCode, imageUrl: target.listings.find((listing) => listing.imageUrl)?.imageUrl,
+    sources: [...new Set(target.listings.map((listing) => listing.retailer))], listings: target.listings,
+    color: target.color, colors: target.colors, gender: (target.gender as CatalogBrowseProduct["gender"]) || "Unknown",
+    releaseYear: target.releaseYear,
+  };
+  try { await persistCatalogSnapshot([canonicalProduct], results); } catch { /* normalized inventory is an additive index; offers remain visible */ }
   try { await writeCache(cacheKey, query, results, statuses); } catch { /* keep live offers visible if caching fails */ }
-  return NextResponse.json({ productId: target.id, offers: results, sources: statuses, cached: false, cacheHours: CACHE_HOURS, note: "Only direct grouped listings and provider results that pass exact-product and selected-audience matching are included. The seller page remains the final source for variant and checkout confirmation." });
+  return NextResponse.json({ productId: target.id, offers: results, sources: statuses, cached: false, persistenceAvailable, cacheHours: CACHE_HOURS, note: "Only direct grouped listings and provider results that pass exact-product and selected-audience matching are included. The seller page remains the final source for variant and checkout confirmation." });
 }

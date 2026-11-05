@@ -1,8 +1,26 @@
-# Outlet Radar — Unified Multi-Brand Search v2.0.0
+# Outlet Radar
 
 A multi-brand product discovery and price-comparison platform built with Next.js, Vercel, and Neon Postgres. Browse sneaker, apparel and accessory catalogs by brand, discover models that have not previously been searched in the app, compare online listings across StockX, GOAT, Flight Club, Kicks Crew and Google Shopping merchants such as Foot Locker, Champs Sports and JD Sports. Catalog and retailer searches are cached in Neon to conserve free API credits.
 
 > **Catalog and inventory limitation:** The catalog is a discovery index, not a complete universal product master. StockX/GOAT/Flight Club/Kicks Crew and Google Shopping can reveal models not previously searched in Outlet Radar, including older/discontinued models when those providers index them. A catalog record is not proof of a current listing or size-level availability. The app does not currently claim physical-store inventory; online listings still require seller checkout verification.
+
+
+## Version 2.1 — Normalized inventory and provider reliability
+
+- Added an additive Neon data model: `canonical_products` stores canonical model/colorway/release records; `retailer_offers` stores each individual seller/marketplace listing; `retailer_offer_sizes` stores size labels separately from stock signals; `provider_health` tracks provider response health and circuit-breaker state.
+- Catalog discoveries and exact comparison offers are persisted to the normalized tables while the existing `retailer_search_cache` continues to serve fast shared snapshots. Existing watchlists, price history and legacy caches are preserved.
+- Explicit size-provider responses are upserted as variant signals with source, size system, price, source status and verification time. Catalog size labels remain `unknown`; merely seeing a size label never makes it available.
+- Added per-source circuit breakers. After three consecutive request failures, that source is temporarily paused with exponential backoff. Other sources and already-cached results continue to work.
+- Added public `GET /api/health` for sanitized service/database/provider-configuration checks and protected `GET /api/admin/providers` for current-month budget reservations, provider health and normalized catalog counts. The admin endpoint requires `Authorization: Bearer <CRON_SECRET>`.
+- Reduced automatic image-detail enrichment from 16 to 6 catalog cards per browse to avoid spending disproportionate provider credits on cosmetic enrichment.
+- Comparison can still return catalog-seeded exact listings if Neon becomes temporarily unavailable; in that condition, new external provider pulls pause because shared budgets and caches cannot be safely enforced.
+- Run `db/migrations/002_catalog_inventory.sql` in Neon before deploying this release. The migration is idempotent and does not delete existing application data.
+
+### v2.1 operational notes
+
+- The provider budget figures are application-side safety reservations, not authoritative provider billing. Reconcile them with the PCKT and SerpApi dashboards.
+- Provider circuit breakers are best-effort and require the v2.1 migration. If the health table is not installed, requests continue using the existing monthly budget controls, but cooldown telemetry is unavailable.
+- The admin provider endpoint is intentionally protected by the existing `CRON_SECRET`; do not put that secret in a public URL, source file, or `NEXT_PUBLIC_` variable.
 
 Outlet Radar is an independent comparison platform and is not affiliated with or endorsed by any brand, retailer, or marketplace displayed.
 
@@ -16,7 +34,7 @@ Outlet Radar is an independent comparison platform and is not affiliated with or
 - **Compact mobile-first layout:** the search controls are in the opening panel; advanced refinements can be expanded when needed. The old separate Nike search section and Nike store-directory link have been removed.
 - **Free-tier protection:** catalog and retailer lookups are cached in Neon, with shared monthly safety ceilings of 450 PCKT credits and 200 SerpApi requests. There is no arbitrary daily search cap per visitor; after a provider safety budget is reached, existing cached results remain available and new uncached requests to that source pause.
 - **Watchlist:** save products from the multi-brand catalog. Neon persistence is enabled when `DATABASE_URL` is configured and the schema has been run. The current automated daily price-history job remains Nike-URL-only; other saved retailer links are retained but are not automatically refreshed yet.
-- **Product imagery:** the catalog extracts product artwork from multiple provider image fields and hydrates up to 16 image-less models per uncached browse using cached StockX, GOAT or Flight Club product details. Some source records still do not include an image.
+- **Product imagery:** the catalog extracts product artwork from multiple provider image fields and hydrates up to 6 image-less models per uncached browse using cached StockX, GOAT or Flight Club product details. Some source records still do not include an image.
 - **Inventory clarity:** catalog filters use attributes actually supplied by sources. Comparison size signals distinguish StockX active asks, GOAT size-availability flags and Flight Club listed new sizes; these are not final checkout guarantees.
 
 ## Version 2.0 changes
@@ -112,7 +130,7 @@ Both keys are optional and do not replace `API_SH_KEY`. Do not give either key a
 3. Add it to Vercel as `DATABASE_URL`.
 4. Open Neon's SQL Editor and run the contents of [`db/schema.sql`](./db/schema.sql) if this is a new database or the schema has not already been applied.
 
-The database contains watchlists, price history, legacy hashed search-limit records, Nike direct-search caches, retailer/catalog discovery caches, retailer API monthly-budget counters, a shared PCKT pacing gate, and a cached Nike typeahead catalogue. A legacy nearby retailer-location cache table may remain in Neon but is no longer used by the customer-facing UI. Run the **entire current** `db/schema.sql` in Neon's SQL Editor. It uses `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so it can be run again on an existing project without deleting your existing watchlist or history. If Neon is not configured, live product search still works, but persistent search caching and catalog suggestions are unavailable.
+The database contains watchlists, price history, legacy hashed search-limit records, Nike direct-search caches, retailer/catalog discovery caches, retailer API monthly-budget counters, a shared PCKT pacing gate, canonical products, retailer offers, size variants and provider health telemetry. A legacy nearby retailer-location cache table may remain in Neon but is no longer used by the customer-facing UI. Run the **entire current** `db/schema.sql` in Neon's SQL Editor. It uses `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so it can be run again on an existing project without deleting your existing watchlist or history. If Neon is not configured, live product search still works, but persistent search caching and catalog suggestions are unavailable.
 
 ### 4. Deploy to Vercel
 
@@ -131,9 +149,27 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-### Upgrade from v1.7
+## Database-first catalog behavior
 
-Replace the repository contents with this v2.0 project and deploy. If you already ran the v1.7 multi-retailer migration, no additional SQL migration is required: v2.0 reuses `retailer_search_cache` for brand/type catalog discovery and exact-product offer caching. If the retailer tables are not installed, run [`db/migrations/001_multi_retailer.sql`](./db/migrations/001_multi_retailer.sql) or the complete current [`db/schema.sql`](./db/schema.sql) in Neon. Add `PCKT_API_KEY` to enable StockX, GOAT, Flight Club and Kicks Crew catalog discovery, and `SERPAPI_API_KEY` to add Google Shopping merchant results such as Foot Locker when returned. `API_SH_KEY` is not needed for the unified catalog; it remains for legacy Nike-specific routes and the Nike-only scheduled price-check job.
+Catalog discovery follows this order: exact-query cache, then the shared normalized `canonical_products` / `retailer_offers` catalog, then external provider discovery only when the product has not already been learned. The normalized catalog uses whole numeric model tokens (so model `1` does not match `14`) and the user's brand, product type, audience and release-year filters. Size, color, price and sale remain result refinements. Existing catalog products remain discoverable even when their previous retailer offers have expired; expired offers are not presented as current retailer listings. Comparing a product is the separate step that attempts to refresh retailer offers.
+
+## Provider health dashboard
+
+After applying `db/migrations/002_catalog_inventory.sql` and deploying v2.1, open `/admin/providers` on the production site. Enter the existing `CRON_SECRET` from Vercel to view application-side PCKT/SerpApi usage reservations, provider success/error/cooldown state, and normalized catalog counts. The secret is sent only in an HTTPS authorization header and is held in page memory; it is not placed in the URL or browser local storage. The underlying endpoint is protected with constant-time token comparison.
+
+`/api/health` is a public, sanitized liveness check. It reports whether Neon is configured/connected and which provider keys are configured, but never returns secrets.
+
+The provider budget values in the dashboard are Outlet Radar's own reservations, not the provider's billing ledger. Check each provider account for authoritative quota and billing status. If a provider enters cooldown, the app continues showing other providers and cached/grouped offers where available.
+
+### Upgrade from v2.0.1
+
+1. Run [`db/migrations/002_catalog_inventory.sql`](./db/migrations/002_catalog_inventory.sql) in the same Neon project and branch used by Vercel `DATABASE_URL`.
+2. Upload the v2.1 ZIP through the GitHub ZIP updater, or replace the repository contents with the project files.
+3. Confirm the extraction workflow and then confirm the subsequent Vercel deployment is **Ready**.
+4. Check `/api/health`, then open `/admin/providers` and enter the existing `CRON_SECRET` to view provider budgets and health.
+5. Optional but recommended: replace the repository's existing `.github/workflows/apply-update-zip.yml` with the separately supplied `apply-update-zip-validate.yml`. That workflow extracts the ZIP into a temporary directory, installs dependencies and runs `npm run build` before it changes the working source files. A failed build leaves the current application source intact.
+
+No existing tables need to be dropped. The migration is additive and safe to run more than once. Keep `PCKT_API_KEY`, `SERPAPI_API_KEY`, `DATABASE_URL` and `CRON_SECRET` as server-side environment variables. `API_SH_KEY` remains optional for the legacy Nike-only routes.
 
 ## Environment variables
 
@@ -143,7 +179,7 @@ Replace the repository contents with this v2.0 project and deploy. If you alread
 | `DATABASE_URL` | Watchlist, history, product/search/store caches | Neon pooled PostgreSQL connection string |
 | `PCKT_API_KEY` | Marketplace catalog discovery and StockX, GOAT, Flight Club and Kicks Crew comparison | PCKT bearer token; never expose client-side |
 | `SERPAPI_API_KEY` | Optional Google Shopping retailer listings | SerpApi key; never expose client-side |
-| `CRON_SECRET` | Daily price-check job | Random secret, at least 32 characters recommended |
+| `CRON_SECRET` | Daily price-check job and protected provider diagnostics | Random secret, at least 32 characters recommended |
 | `MAX_DAILY_PRICE_CHECKS` | Optional | Default 10; applies only to Nike product URLs in the legacy price-check job |
 | `RATE_LIMIT_SALT` | Legacy optional setting | Retained for compatibility; arbitrary daily visitor search caps are not enforced by v1.9 |
 
@@ -173,23 +209,30 @@ If you add many users, watchlist rows, or manual searches, monitor the PCKT, Ser
 
 ```text
 app/
+  admin/providers/
+    page.tsx
+    ProviderDashboard.tsx
   api/
-    cron/price-check/route.ts
+    admin/providers/route.ts
+    catalog/route.ts
+    catalog/offers/route.ts
+    catalog/availability/route.ts
     health/route.ts
-    product/route.ts
-    search/route.ts
-    marketplaces/route.ts
-    suggest/route.ts
-    watchlist/route.ts
+    cron/price-check/route.ts
   globals.css
   layout.tsx
   page.tsx
- db/
+db/
   schema.sql
- lib/
+  migrations/
+    001_multi_retailer.sql
+    002_catalog_inventory.sql
+lib/
+  catalog-store.ts
+  provider-health.ts
+  audience.ts
+  search-match.ts
   db.ts
-  nike.ts
-  search-cache.ts
   types.ts
 vercel.json
 .env.example

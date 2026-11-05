@@ -39,6 +39,8 @@ export type MarketplaceOffer = {
   id: string;
   source: MarketplaceProvider;
   retailer: string;
+  providerProductId?: string;
+  condition?: string;
   channel: "online" | "store";
   title: string;
   url: string;
@@ -66,6 +68,7 @@ export type CatalogListing = {
   title?: string;
   url: string;
   providerProductId?: string;
+  styleCode?: string;
   imageUrl?: string;
   price?: number;
   originalPrice?: number;
@@ -112,7 +115,7 @@ export type CatalogBrowseProduct = {
 
 export type MarketplaceSourceStatus = {
   name: string;
-  status: "success" | "not_configured" | "error" | "budget_reached";
+  status: "success" | "not_configured" | "error" | "budget_reached" | "cooldown";
   results: number;
   message: string;
 };
