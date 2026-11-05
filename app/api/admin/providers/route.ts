@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { PROVIDER_BUDGETS } from "@/lib/provider-budget";
+import { getCatalogQueueStats } from "@/lib/catalog-queue";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,7 +62,7 @@ export async function GET(request: NextRequest) {
     const counts = catalogRows[0] || { canonical_products: 0, retailer_offers: 0, size_variants: 0 };
     return NextResponse.json({
       service: "outlet-radar",
-      version: "2.2.0",
+      version: "2.3.0",
       checkedAt: new Date().toISOString(),
       budgets: (Object.keys(PROVIDER_BUDGETS) as Array<keyof typeof PROVIDER_BUDGETS>).map((provider) => {
         const monthlyLimit = PROVIDER_BUDGETS[provider].monthly;
@@ -75,6 +76,7 @@ export async function GET(request: NextRequest) {
         };
       }),
       providers: healthRows,
+      refreshQueue: await getCatalogQueueStats(),
       catalog: {
         canonicalProducts: counts.canonical_products,
         retailerOffers: counts.retailer_offers,
@@ -92,6 +94,6 @@ export async function GET(request: NextRequest) {
       ],
     }, { headers: { "Cache-Control": "no-store" } });
   } catch {
-    return NextResponse.json({ error: "Provider diagnostics are unavailable. Confirm that db/migrations/002_catalog_inventory.sql and 003_provider_budget_and_size_diagnostics.sql have been applied to the Neon branch used by DATABASE_URL." }, { status: 503 });
+    return NextResponse.json({ error: "Provider diagnostics are unavailable. Confirm that db/migrations/002_catalog_inventory.sql and 003_provider_budget_and_size_diagnostics.sql (and 004_catalog_refresh_queue.sql for the refresh queue) have been applied to the Neon branch used by DATABASE_URL." }, { status: 503 });
   }
 }

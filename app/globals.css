@@ -335,3 +335,8 @@
 @media(max-width:760px){.admin-budget-daily{font-size:8px;flex-wrap:wrap}.admin-provider-meta{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .admin-stat-card small{grid-column:2;font:8px/1.4 var(--mono);color:#889285;margin-top:-3px}
+
+/* v2.3: shown when a search could only be answered from saved data or partially. */
+.catalog-incomplete-notice{display:flex;flex-direction:column;gap:4px;margin:0 0 12px;padding:10px 12px;border:1px solid #e8d9a8;border-radius:10px;background:#fbf6e3;color:#4a4220}
+.catalog-incomplete-notice strong{font:600 13px var(--display)}
+.catalog-incomplete-notice span{font:400 12px/1.5 var(--body)}

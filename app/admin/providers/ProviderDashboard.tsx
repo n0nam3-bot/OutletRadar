@@ -28,6 +28,7 @@ type Diagnostics = {
   checkedAt: string;
   budgets: Budget[];
   providers: Provider[];
+  refreshQueue?: { available: boolean; pending: number; oldestPendingAt: string | null; completedLast7Days: number };
   catalog: { canonicalProducts: number; retailerOffers: number; sizeVariants: number; verifiedSizeSignals: number; availableSizeSignals: number; unknownSizeLabels: number };
   notes?: string[];
 };
@@ -124,6 +125,7 @@ export default function ProviderAdminPage() {
             <article className="admin-stat-card"><Database size={17}/><span>Canonical products</span><strong>{data.catalog.canonicalProducts.toLocaleString()}</strong></article>
             <article className="admin-stat-card"><Activity size={17}/><span>Retailer offers</span><strong>{data.catalog.retailerOffers.toLocaleString()}</strong></article>
             <article className="admin-stat-card"><CheckCircle2 size={17}/><span>Size variants</span><strong>{data.catalog.sizeVariants.toLocaleString()}</strong><small>{data.catalog.verifiedSizeSignals.toLocaleString()} verified · {data.catalog.availableSizeSignals.toLocaleString()} available · {data.catalog.unknownSizeLabels.toLocaleString()} unknown</small></article>
+            {data.refreshQueue && <article className="admin-stat-card"><Activity size={17}/><span>Refresh queue</span><strong>{data.refreshQueue.available ? data.refreshQueue.pending.toLocaleString() : "Not set up"}</strong><small>{data.refreshQueue.available ? `${data.refreshQueue.completedLast7Days.toLocaleString()} completed in 7 days${data.refreshQueue.oldestPendingAt ? ` · oldest ${dateLabel(data.refreshQueue.oldestPendingAt)}` : ""}` : "Apply migration 004 to enable"}</small></article>}
           </div>
 
           <div className="admin-section-heading"><h2>Provider budgets</h2><span>Shared daily and monthly application-side reservations</span></div>

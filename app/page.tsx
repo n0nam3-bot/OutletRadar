@@ -389,6 +389,8 @@ export default function Home() {
   const [catalogStatus, setCatalogStatus] = useState<Status>("idle");
   const [catalogError, setCatalogError] = useState("");
   const [catalogCachedAt, setCatalogCachedAt] = useState<string | null>(null);
+  // Set when the answer is incomplete (a provider is out of free lookups, paused, or only saved data is shown).
+  const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
   const [saleOnly, setSaleOnly] = useState(false);
   const [genderFilter, setGenderFilter] = useState("all");
   const [suggestions, setSuggestions] = useState<NikeProduct[]>([]);
@@ -608,6 +610,7 @@ export default function Home() {
     }
     setCatalogStatus("loading");
     setCatalogError("");
+    setCatalogNotice(null);
     setActiveCompareProduct(null);
     setMarketplaceOffers([]);
     setMarketplaceSources([]);
@@ -629,6 +632,7 @@ export default function Home() {
       setCatalogProducts(discovered);
       setCatalogSources(Array.isArray(data.sources) ? data.sources : []);
       setCatalogCachedAt(data.cachedAt ? String(data.cachedAt) : null);
+      setCatalogNotice(typeof data.notice === "string" && data.notice ? data.notice : null);
       setCatalogStatus("success");
 
       // A selected shoe size triggers one batched StockX and/or GOAT size-price
@@ -940,6 +944,7 @@ export default function Home() {
         {catalogStatus === "loading" && <div className="store-results-loading">Searching product catalogs across connected marketplaces…</div>}
         {catalogStatus === "idle" && <div className="catalog-explorer-empty"><strong>Start with an item type and model.</strong><span>Browse known models from connected catalogs, including older releases that the original brand may no longer sell.</span></div>}
         {catalogStatus === "success" && <div className="catalog-browser-results">
+          {catalogNotice && <div className="catalog-incomplete-notice" role="status"><strong>Showing saved results</strong><span>{catalogNotice}</span></div>}
           <div className="catalog-browser-meta"><strong>{catalogVisibleProducts.length} matching product{catalogVisibleProducts.length === 1 ? "" : "s"}</strong><span>{catalogCachedAt ? `Cached ${new Date(catalogCachedAt).toLocaleString()}` : "Fresh discovery"} · Offers are grouped by product model</span></div>
           {catalogUnverifiedFilterCount > 0 && <div className="catalog-filter-summary">{catalogUnverifiedFilterCount} products were excluded because provider data did not confirm the selected refinements. Clear a filter to broaden results.</div>}
           {catalogSizeQuoteSources.length > 0 && <div className="catalog-size-source-note">Size data: {catalogSizeQuoteSources.map((source) => `${source.name} — ${source.message}`).join(" · ")}</div>}

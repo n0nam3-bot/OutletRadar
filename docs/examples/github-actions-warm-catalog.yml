@@ -1,0 +1,27 @@
+# Optional: run the catalog warm-up more often than Vercel Hobby cron allows.
+# Copy this file to .github/workflows/warm-catalog.yml (the ZIP updater never writes to .github/).
+# Required repository secrets: SITE_URL (e.g. https://outlet-radar.vercel.app) and CRON_SECRET.
+name: Warm catalog
+
+"on":
+  schedule:
+    - cron: "17 11 * * *"   # 11:17 UTC
+    - cron: "17 23 * * *"   # 23:17 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call the warm-up endpoint
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error --max-time 90 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${SITE_URL}/api/cron/warm-catalog?max=3"
