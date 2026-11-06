@@ -73,12 +73,24 @@ export async function GET(request: NextRequest) {
         products: Number(row.products), lastSeenAt: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : null,
       }));
     } catch { /* coverage is informational */ }
+    let clicks: { available: boolean; byStore: Array<{ retailer: string; source: string; clicks: number }>; byProduct: Array<{ title: string; clicks: number }>; total: number } = { available: false, byStore: [], byProduct: [], total: 0 };
+    try {
+      const byStore = await sql`
+        SELECT retailer, source, SUM(clicks)::int AS clicks FROM offer_click_daily
+        WHERE click_day >= CURRENT_DATE - 6 GROUP BY retailer, source ORDER BY SUM(clicks) DESC LIMIT 15
+      ` as Array<{ retailer: string; source: string; clicks: number }>;
+      const byProduct = await sql`
+        SELECT product_title AS title, SUM(clicks)::int AS clicks FROM offer_click_daily
+        WHERE click_day >= CURRENT_DATE - 6 GROUP BY product_title ORDER BY SUM(clicks) DESC LIMIT 15
+      ` as Array<{ title: string; clicks: number }>;
+      clicks = { available: true, byStore: byStore.map((row) => ({ ...row, clicks: Number(row.clicks) })), byProduct: byProduct.map((row) => ({ ...row, clicks: Number(row.clicks) })), total: byStore.reduce((sum, row) => sum + Number(row.clicks), 0) };
+    } catch { /* table not created yet */ }
     const usage = new Map(usageRows.map((row) => [row.provider, Number(row.units_reserved)]));
     const dailyUsage = new Map(dailyRows.map((row) => [row.provider, Number(row.units_reserved)]));
     const counts = catalogRows[0] || { canonical_products: 0, retailer_offers: 0, size_variants: 0 };
     return NextResponse.json({
       service: "outlet-radar",
-      version: "2.7.0",
+      version: "2.8.0",
       checkedAt: new Date().toISOString(),
       budgets: (Object.keys(PROVIDER_BUDGETS) as Array<keyof typeof PROVIDER_BUDGETS>).map((provider) => {
         const monthlyLimit = PROVIDER_BUDGETS[provider].monthly;
@@ -94,6 +106,7 @@ export async function GET(request: NextRequest) {
       providers: healthRows,
       refreshQueue: await getCatalogQueueStats(),
       retailerCoverage: summarizeCoverage(coverageRows),
+      clicks,
       catalog: {
         canonicalProducts: counts.canonical_products,
         retailerOffers: counts.retailer_offers,

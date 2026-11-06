@@ -28,6 +28,7 @@ type Diagnostics = {
   checkedAt: string;
   budgets: Budget[];
   providers: Provider[];
+  clicks?: { available: boolean; byStore: Array<{ retailer: string; source: string; clicks: number }>; byProduct: Array<{ title: string; clicks: number }>; total: number };
   retailerCoverage?: { targets: Array<{ name: string; via: string; seen: boolean; offers: number; products: number; lastSeenAt: string | null; sellerNames: string[] }>; other: Array<{ retailer: string; source: string; offers: number }> };
   refreshQueue?: { available: boolean; pending: number; oldestPendingAt: string | null; completedLast7Days: number };
   catalog: { canonicalProducts: number; retailerOffers: number; sizeVariants: number; verifiedSizeSignals: number; availableSizeSignals: number; unknownSizeLabels: number };
@@ -187,6 +188,13 @@ export default function ProviderAdminPage() {
                 <span>{target.providers.length ? `via ${target.providers.join(", ")}` : "not returned by any provider for this search"}</span>
               </div>)}
             </div>
+          </>}
+          {data.clicks && <>
+            <div className="admin-section-heading"><h2>Outbound clicks</h2><span>Last 7 days · anonymous counts</span></div>
+            {data.clicks.available ? (data.clicks.total > 0 ? <>
+              <div className="admin-coverage-list">{data.clicks.byStore.map((row) => <div className="admin-coverage-row is-seen" key={`${row.retailer}-${row.source}`}><strong>{row.retailer}</strong><span>{row.clicks.toLocaleString()} click(s) · via {row.source}</span></div>)}</div>
+              <p className="admin-coverage-other">Most clicked products: {data.clicks.byProduct.map((row) => `${row.title} (${row.clicks})`).join(", ")}</p>
+            </> : <p className="admin-coverage-other">No outbound clicks recorded yet.</p>) : <p className="admin-coverage-other">Apply migration 005 to record outbound clicks.</p>}
           </>}
           {data.retailerCoverage && <>
             <div className="admin-section-heading"><h2>Retailer coverage</h2><span>Sellers actually stored from real searches</span></div>

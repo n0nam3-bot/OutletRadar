@@ -4,6 +4,7 @@ Release notes for each Outlet Radar version, newest first. Upgrade instructions 
 
 | Version | Summary |
 |---|---|
+| [v2.8.0](./v2.8.0.md) | Anonymous outbound click counts and admin report |
 | [v2.7.0](./v2.7.0.md) | Admin live connection test and store checklist |
 | [v2.6.0](./v2.6.0.md) | Impact partner catalogs (affiliate-linked brand and store offers) in Compare |
 | [v2.5.0](./v2.5.0.md) | eBay listings in Compare, database-free page health check |

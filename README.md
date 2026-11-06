@@ -16,7 +16,7 @@ Built with Next.js 15, Vercel and Neon Postgres, and designed to keep working on
 - **Exact-product comparison.** **Compare offers** expands a card to show that model's direct retailer listings: seller title, price, size signals and product link. With a Channel3 key it also adds offers from many other stores and brand sites (adidas, New Balance, Puma, Reebok, Vans, Foot Locker and more), with eBay keys it adds new fixed-price eBay listings, and with Impact keys it adds affiliate-linked offers from the brands and stores that approved your account. Similar-but-different models are excluded.
 - **Never an empty page.** If a source is out of free lookups, paused or failing, saved results are shown with a clear notice and the search is queued for an automatic refresh.
 - **Watchlist.** Save products. The daily price-history job currently tracks Nike URLs only; other saved links are kept but not refreshed.
-- **Owner dashboard.** `/admin/providers` shows provider budgets, health, the refresh queue, catalog counts, which retailers have actually appeared in results, and a one-click live connection test of every configured provider.
+- **Owner dashboard.** `/admin/providers` shows provider budgets, health, the refresh queue, catalog counts, which retailers have actually appeared in results, a one-click live connection test of every configured provider, and anonymous counts of which stores and products visitors click.
 
 ## How it works
 
@@ -152,6 +152,7 @@ Releases are applied by uploading a ZIP to the repository root; a GitHub Action 
 | `GET /api/search`, `/api/suggest`, `/api/product` | Legacy Nike search, typeahead and detail |
 | `GET /api/cron/price-check`, `/api/cron/warm-catalog` | Scheduled jobs (secret required) |
 | `GET /api/admin/providers`, `POST /api/admin/providers/test` | Diagnostics and live connection test (secret required) |
+| `POST /api/click` | Anonymous outbound-click counter (always 204) |
 | `GET /api/health` | Sanitized health check |
 | `GET /api/marketplaces` | Retired; returns HTTP 410 |
 
@@ -170,6 +171,7 @@ app/
     cron/                       price-check/, warm-catalog/
     admin/providers/            Diagnostics API; test/ (live connection test)
     health/  marketplaces/      Health check; retired endpoint
+    click/                      Anonymous outbound click counter
     search/  suggest/  product/ Legacy Nike endpoints
     watchlist/                  Saved products
 lib/
@@ -185,7 +187,7 @@ lib/
   search-cache.ts  search-match.ts  nike.ts  audience.ts  types.ts  db.ts
 db/
   schema.sql                    Full idempotent schema
-  migrations/                   001-004, additive
+  migrations/                   001-005, additive
 changelog/                      Release notes per version
 docs/                           Upgrading, free-tier operations, roadmap
 .github/workflows/              ZIP validation and apply workflow
@@ -197,7 +199,7 @@ vercel.json                     Cron schedule
 - [Free-tier operations](./docs/free-tier-operations.md): limits, fallbacks, tuning, warm-up, dashboard
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v2.7.0](./changelog/v2.7.0.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v2.8.0](./changelog/v2.8.0.md))
 
 ## Data and license
 

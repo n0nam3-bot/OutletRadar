@@ -391,6 +391,16 @@ export default function Home() {
   const [catalogCachedAt, setCatalogCachedAt] = useState<string | null>(null);
   // Set when the answer is incomplete (a provider is out of free lookups, paused, or only saved data is shown).
   const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
+
+  // Reports an outbound click for the owner's anonymous daily counts. The link stays a normal
+  // direct link; this runs in the background and never delays or blocks navigation.
+  function trackOfferClick(offer: { source: string; retailer: string; url: string; title: string; brand?: string }) {
+    try {
+      const body = JSON.stringify({ source: offer.source, retailer: offer.retailer, url: offer.url, title: activeCompareProduct?.title ?? offer.title, brand: activeCompareProduct?.brand ?? offer.brand ?? "" });
+      const sent = typeof navigator.sendBeacon === "function" && navigator.sendBeacon("/api/click", new Blob([body], { type: "application/json" }));
+      if (!sent) void fetch("/api/click", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => undefined);
+    } catch { /* tracking is best-effort */ }
+  }
   const [saleOnly, setSaleOnly] = useState(false);
   const [genderFilter, setGenderFilter] = useState("all");
   const [suggestions, setSuggestions] = useState<NikeProduct[]>([]);
@@ -980,7 +990,7 @@ export default function Home() {
                       {offer.price !== undefined && <div className="catalog-inline-price">{money(offer.price, offer.currency)} <small>{offer.priceLabel ?? "Displayed price"}</small></div>}
                       {quoteLabels.length > 0 ? <div className="catalog-inline-sizes"><b>Marketplace size signals</b><div>{quotes.slice(0, 18).map((quote, index) => <span className={quote.available === true ? "is-available" : quote.available === false ? "is-unavailable" : "is-unknown"} key={`${quote.label}-${index}`}>{quote.label} · {quote.available === true ? "signal" : quote.available === false ? "no ask" : "unverified"}{quote.price !== undefined ? ` · ${money(quote.price, quote.currency)}` : ""}</span>)}</div></div> : listedSizes.length > 0 ? <div className="catalog-inline-sizes"><b>Sizes listed by seller (stock not confirmed)</b><div>{listedSizes.slice(0, 18).map((size) => <span className="is-unknown" key={size}>{size}</span>)}</div></div> : <p className="catalog-inline-no-sizes">This source did not provide size-level data.</p>}
                       <p className="catalog-inline-stock">{offer.availabilityLabel}</p>
-                      <a className="catalog-inline-link" href={offer.url} target="_blank" rel="noreferrer">Open this exact listing <ExternalLink size={12} /></a>
+                      <a className="catalog-inline-link" href={offer.url} target="_blank" rel="noreferrer" onClick={() => trackOfferClick(offer)}>Open this exact listing <ExternalLink size={12} /></a>
                     </article>;
                   })}</div> : <div className="retailer-no-results"><strong>No exact retailer listings passed the product match.</strong><span>We do not show similar models as offers. The product remains in the catalog; check back later or use the original catalog listings if a seller changes its title.</span></div>}
                   {marketplaceSources.length > 0 && <details className="catalog-sources-details"><summary>Retailers checked</summary><div className="retailer-source-grid">{marketplaceSources.map((source) => <div className="retailer-source-status" key={`${source.key ?? source.name}-${source.status}`}><strong>{source.name} · {source.status === "success" ? `${source.results} found` : source.status.replaceAll("_", " ")}</strong><span>{source.message}</span></div>)}</div></details>}

@@ -374,3 +374,19 @@ CREATE INDEX IF NOT EXISTS idx_catalog_refresh_queue_pending
   WHERE completed_at IS NULL;
 
 COMMENT ON TABLE catalog_refresh_queue IS 'Searches awaiting a complete provider refresh by the scheduled warm-up job.';
+
+-- v2.8 anonymous outbound click counts (migration 005).
+CREATE TABLE IF NOT EXISTS offer_click_daily (
+  click_day DATE NOT NULL DEFAULT CURRENT_DATE,
+  source VARCHAR(24) NOT NULL,
+  retailer VARCHAR(80) NOT NULL,
+  host VARCHAR(120) NOT NULL,
+  product_title VARCHAR(160) NOT NULL,
+  brand VARCHAR(40) NOT NULL DEFAULT '',
+  clicks INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (click_day, source, retailer, host, product_title)
+);
+
+CREATE INDEX IF NOT EXISTS idx_offer_click_daily_day ON offer_click_daily (click_day);
+
+COMMENT ON TABLE offer_click_daily IS 'Anonymous per-day outbound click counts by store and product.';
