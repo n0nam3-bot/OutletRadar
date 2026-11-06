@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { filterOfferSizeLabels, inferListingAudience, isOfferAllowedForAudience } from "@/lib/audience";
 import { persistCatalogSnapshot } from "@/lib/catalog-store";
 import { CHANNEL3_CACHE_HOURS, channel3Candidates, channel3Configured, searchChannel3 } from "@/lib/channel3";
+import { EBAY_CACHE_HOURS, ebayConfigured, ebayOffers, searchEbay } from "@/lib/ebay";
 import { getProviderCooldown, recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 import { reserveProviderBudget } from "@/lib/provider-budget";
 import type { CatalogBrowseProduct, CatalogListing, MarketplaceOffer, MarketplaceProvider, MarketplaceSourceStatus } from "@/lib/types";
@@ -310,6 +311,7 @@ function channel3Match(offer: MarketplaceOffer, target: ExactTarget): boolean {
 function sourceKeyConfigured(key: string): boolean {
   if (key === "shopping") return Boolean(process.env.SERPAPI_API_KEY);
   if (key === "channel3") return channel3Configured();
+  if (key === "ebay") return ebayConfigured();
   if (key === "nike") return Boolean(process.env.API_SH_KEY);
   return Boolean(process.env.PCKT_API_KEY);
 }
@@ -402,7 +404,7 @@ export async function POST(request: NextRequest) {
   const sourceNames: Record<OfferSource, string> = {
     stockx: "StockX", goat: "GOAT", flightclub: "Flight Club",
     kickscrew: "Kicks Crew", shopping: "Google Shopping merchants",
-    nike: "Nike.com", channel3: "Channel3 merchants",
+    nike: "Nike.com", channel3: "Channel3 merchants", ebay: "eBay",
   };
   const statuses: SourceStatus[] = (Object.keys(sourceNames) as OfferSource[]).map((source) => {
     const count = offers.filter((offer) => offer.source === source).length;
@@ -438,6 +440,7 @@ export async function POST(request: NextRequest) {
           if (!channel3Match(offer, target)) continue;
           const retailerKey = norm(offer.retailer);
           if (known.has(retailerKey)) continue; // already listed from the catalog group
+          if (retailerKey === "ebay" && ebayConfigured()) continue; // eBay is queried directly below
           const current = cheapestPerRetailer.get(retailerKey);
           if (!current || (offer.price ?? Infinity) < (current.price ?? Infinity)) cheapestPerRetailer.set(retailerKey, offer);
         }
@@ -453,6 +456,36 @@ export async function POST(request: NextRequest) {
   }
   const statusIndex = statuses.findIndex((status) => status.key === "channel3");
   if (statusIndex >= 0) statuses[statusIndex] = channel3Status; else statuses.push(channel3Status);
+
+  // eBay: new, fixed-price listings of the exact product (Browse API, free allowance). Live only:
+  // cached for EBAY_CACHE_HOURS and never saved to the normalized catalog.
+  const ebayStatus: SourceStatus = { key: "ebay", name: sourceNames.ebay, status: "not_configured", results: 0, message: "Add EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in Vercel to include new eBay listings." };
+  if (ebayConfigured()) {
+    const cooldown = await getProviderCooldown("ebay");
+    if (cooldown.paused) {
+      Object.assign(ebayStatus, { status: "cooldown", message: `Temporarily paused after repeated provider errors${cooldown.disabledUntil ? ` until ${cooldown.disabledUntil}` : ""}.` });
+    } else if (!(await reserveProviderBudget("ebay", 1))) {
+      Object.assign(ebayStatus, { status: "budget_reached", message: "Daily eBay safety budget reached. Other retailers are still shown." });
+    } else {
+      const startedAt = Date.now();
+      try {
+        const ebayQuery = [target.title, target.styleCode, norm(target.title).includes(norm(target.brand)) ? "" : target.brand].filter(Boolean).join(" ").slice(0, 150);
+        const styleKey = norm(target.styleCode ?? "").replace(/\s+/g, "");
+        const matched = ebayOffers(await searchEbay(ebayQuery, 30))
+          .filter((offer) => channel3Match(offer, target) || Boolean(styleKey && norm(offer.title).replace(/\s+/g, "").includes(styleKey)))
+          .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))
+          .slice(0, 3);
+        offers.push(...matched);
+        await recordProviderSuccess("ebay", Date.now() - startedAt, matched.length);
+        Object.assign(ebayStatus, { status: "success", results: matched.length, message: matched.length ? `${matched.length} new fixed-price eBay listing(s) matched this product. These are independent sellers; confirm size and authenticity.` : "No new fixed-price eBay listing matched this exact product." });
+      } catch (error) {
+        await recordProviderFailure("ebay", Date.now() - startedAt, error);
+        Object.assign(ebayStatus, { status: "error", message: error instanceof Error ? error.message : "eBay request failed." });
+      }
+    }
+  }
+  const ebayIndex = statuses.findIndex((status) => status.key === "ebay");
+  if (ebayIndex >= 0) statuses[ebayIndex] = ebayStatus; else statuses.push(ebayStatus);
 
   // Apply the audience selected by the shopper to each retailer listing, not
   // merely to the grouped catalog card. GS/PS/youth variants are excluded from
@@ -487,9 +520,9 @@ export async function POST(request: NextRequest) {
   try { await persistCatalogSnapshot([canonicalProduct], results); } catch { /* normalized inventory is an additive index; offers remain visible */ }
   // Channel3 data is cached for hours, not days. A Channel3 failure or exhausted budget
   // is not cached so the next Compare can retry once it recovers.
-  const channel3Incomplete = ["budget_reached", "cooldown", "error"].includes(channel3Status.status);
-  const ttlHours = channel3Status.status === "success" ? CHANNEL3_CACHE_HOURS : CACHE_HOURS;
-  if (!channel3Incomplete) {
+  const liveIncomplete = [channel3Status, ebayStatus].some((status) => ["budget_reached", "cooldown", "error"].includes(status.status));
+  const ttlHours = channel3Status.status === "success" ? Math.min(CHANNEL3_CACHE_HOURS, EBAY_CACHE_HOURS) : ebayStatus.status === "success" ? EBAY_CACHE_HOURS : CACHE_HOURS;
+  if (!liveIncomplete) {
     try { await writeCache(cacheKey, query, results, statuses, ttlHours); } catch { /* keep live offers visible if caching fails */ }
   }
   return NextResponse.json({ productId: target.id, offers: results, sources: statuses, cached: false, persistenceAvailable, cacheHours: CACHE_HOURS, note: "Only direct retailer listings already grouped with this exact catalog product are shown. Compare offers does not run new broad product searches or spend catalog-search credits. The seller page remains the final source for variant and checkout confirmation." });

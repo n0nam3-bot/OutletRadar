@@ -454,7 +454,7 @@ export default function Home() {
           }
         })
         .catch(() => undefined);
-      fetch("/api/health").then((response) => response.json()).then((health) => {
+      fetch("/api/health?light=1").then((response) => response.json()).then((health) => {
         setProviderConfigured(Boolean(health.productSearchConfigured));
         setDatabaseConfigured(Boolean(health.databaseConfigured));
       }).catch(() => { setProviderConfigured(false); });

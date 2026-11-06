@@ -19,6 +19,7 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 
 | Version | Migration to run | Required? |
 |---|---|---|
+| v2.5.0 | None | No database change. |
 | v2.4.0 | None | No database change. |
 | v2.3.0 | `004_catalog_refresh_queue.sql` | Recommended. The app works without it, but the refresh queue (and its dashboard card) stay disabled. |
 | v2.2.0 | `003_provider_budget_and_size_diagnostics.sql` | Required. Adds the daily budget ledger and the atomic reservation function. |
@@ -26,6 +27,12 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 | v1.7 | `001_multi_retailer.sql` | Required. Retailer search cache and monthly usage. |
 
 For a brand-new database, run the whole of `db/schema.sql` instead of the individual migrations. It is idempotent and always reflects the current schema.
+
+## Upgrading from v2.4.0 to v2.5.0
+
+1. No migration is needed. Upload the v2.5 ZIP and wait for the deployment.
+2. Optional: register at https://developer.ebay.com, create a **production** keyset, and add `EBAY_CLIENT_ID` (App ID) and `EBAY_CLIENT_SECRET` (Cert ID) in Vercel. Redeploy. To earn commission, join the eBay Partner Network and also add `EBAY_CAMPAIGN_ID`.
+3. Press **Compare offers** on a popular product; the sources list should show "eBay".
 
 ## Upgrading from v2.3.x to v2.4.0
 

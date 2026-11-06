@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/db";
 
-export type BudgetProvider = "pckt" | "serpapi" | "apish" | "channel3";
+export type BudgetProvider = "pckt" | "serpapi" | "apish" | "channel3" | "ebay";
 
 function envNumber(name: string, fallback: number, min: number, max: number): number {
   const raw = process.env[name];
@@ -33,6 +33,11 @@ export const PROVIDER_BUDGETS: Record<BudgetProvider, { monthly: number; daily: 
   channel3: {
     monthly: envNumber("CHANNEL3_MONTHLY_BUDGET", 900, 0, 100_000),
     daily: envNumber("CHANNEL3_DAILY_BUDGET", 30, 0, 10_000),
+  },
+  // eBay Browse API default allowance: 5,000 calls/day. Keep headroom below it.
+  ebay: {
+    monthly: envNumber("EBAY_MONTHLY_BUDGET", 90_000, 0, 100_000),
+    daily: envNumber("EBAY_DAILY_BUDGET", 3_000, 0, 10_000),
   },
 };
 

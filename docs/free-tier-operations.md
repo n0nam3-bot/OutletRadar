@@ -10,6 +10,7 @@ Outlet Radar is designed to keep working on free plans of Vercel, Neon, PCKT and
 | SerpApi | 250 searches/month | App ceiling 200/month and 7/day. One search per uncached query. |
 | API.SH | Plan-dependent | App ceiling 1,000/month and 25/day. One request per uncached Nike or Jordan search (Nike.com listings), plus the legacy Nike features. |
 | Channel3 | 1,000 credits/month (verify in your dashboard) | App ceiling 900/month and 30/day. One search per Compare offers click, cached 3 hours. |
+| eBay Browse API | 5,000 calls/day by default (verify in your developer account) | App ceiling 3,000/day. One search per Compare offers click, cached 3 hours. |
 | Vercel Hobby | Cron jobs run at most once per day, within the scheduled hour | Two daily crons: price check and catalog warm-up. |
 | Neon Free | 0.5 GB storage and 100 compute-hours per project per month; compute is free only while it scales to zero | Everything is cached in Neon; keep it idle when possible. |
 
@@ -37,7 +38,7 @@ Most brands (adidas, New Balance, Puma, Converse, Reebok, Vans) publish no free 
 - **Channel3** (built in): one API that matches a product to offers at many stores and brand sites. It is used only when someone presses **Compare offers**, so it costs one credit per comparison, and results are cached for 3 hours because its terms ask that offer data not be stored longer.
 - **Google Shopping via SerpApi** (built in): returns whichever merchants Google lists for a query.
 - **Affiliate product feeds** (planned, see the roadmap): the networks you apply to, such as Impact, supply bulk product data for approved brands and stores.
-- **eBay Browse API** (planned): a large free daily quota for eBay listings.
+- **eBay Browse API** (built in): new fixed-price eBay listings in Compare, with a large free daily quota. Used live only; eBay's license terms limit how long its data may be kept.
 
 Use `/admin/providers` → **Retailer coverage** to see which stores have actually appeared in results.
 
@@ -68,12 +69,13 @@ All optional; set them in Vercel → Settings → Environment Variables.
 | `SERPAPI_DAILY_BUDGET` / `SERPAPI_MONTHLY_BUDGET` | 7 / 200 | Searches |
 | `APISH_DAILY_BUDGET` / `APISH_MONTHLY_BUDGET` | 25 / 1000 | Requests |
 | `CHANNEL3_DAILY_BUDGET` / `CHANNEL3_MONTHLY_BUDGET` | 30 / 900 | Searches |
+| `EBAY_DAILY_BUDGET` / `EBAY_MONTHLY_BUDGET` | 3000 / 90000 | Calls |
 | `WARM_DAILY_SHARE` | 0.4 | Fraction of each daily budget the warm-up may use (0.05-0.9) |
 
 If you move to a paid provider plan, raise the monthly and daily values to match.
 
 ## Protecting Neon's compute allowance
-- Do not point an uptime monitor at `/api/health`: it runs a database query and keeps Neon awake.
+- Do not point an uptime monitor at `/api/health`: it runs a database query and keeps Neon awake. The web page itself uses `/api/health?light=1`, which never touches the database.
 - Prefer a few scheduled jobs over frequent polling.
 - Watch **Storage** in the Neon console. Expired cache rows are not deleted automatically; if storage grows, delete old rows from `retailer_search_cache` and `nike_search_cache` where `expires_at` is more than a month in the past.
 

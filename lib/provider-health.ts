@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/db";
 
-export type ProviderHealthKey = "stockx" | "goat" | "flightclub" | "kickscrew" | "shopping" | "apish" | "channel3";
+export type ProviderHealthKey = "stockx" | "goat" | "flightclub" | "kickscrew" | "shopping" | "apish" | "channel3" | "ebay";
 export type ProviderCooldown = { paused: boolean; disabledUntil?: string; consecutiveFailures: number };
 
 /** Provider health telemetry is best-effort: an observability failure must not
