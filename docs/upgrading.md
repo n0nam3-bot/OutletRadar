@@ -19,6 +19,7 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 
 | Version | Migration to run | Required? |
 |---|---|---|
+| v2.6.0 | None | No database change. |
 | v2.5.0 | None | No database change. |
 | v2.4.0 | None | No database change. |
 | v2.3.0 | `004_catalog_refresh_queue.sql` | Recommended. The app works without it, but the refresh queue (and its dashboard card) stay disabled. |
@@ -27,6 +28,13 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 | v1.7 | `001_multi_retailer.sql` | Required. Retailer search cache and monthly usage. |
 
 For a brand-new database, run the whole of `db/schema.sql` instead of the individual migrations. It is idempotent and always reflects the current schema.
+
+## Upgrading from v2.5.0 to v2.6.0
+
+1. No migration is needed. Upload the v2.6 ZIP and wait for the deployment.
+2. Optional: in the Impact dashboard open Account Settings → API, copy the Account SID and Auth Token, and add them in Vercel as `IMPACT_ACCOUNT_SID` and `IMPACT_AUTH_TOKEN`. Redeploy.
+3. Press **Compare offers** on a popular product; "Impact partner stores" should appear in the sources list. If it shows an error, the message includes Impact's own response.
+4. Coverage depends on which brand and store programs have approved your account; apply to more in Impact to widen it.
 
 ## Upgrading from v2.4.0 to v2.5.0
 

@@ -13,7 +13,7 @@ Built with Next.js 15, Vercel and Neon Postgres, and designed to keep working on
 - **Structured discovery.** Choose an item type, optional brand, audience and release year, and describe the model (at least two characters). Shorthand such as `aj1`, `af1` or `nb 550` is understood.
 - **Local refinements.** Size, color, price range and sale-only filter the results already on screen; they never spend provider credits.
 - **Grouped products.** Listings from different retailers that describe the same model are combined into one card. Conflicting known year, audience or color keeps variants apart.
-- **Exact-product comparison.** **Compare offers** expands a card to show that model's direct retailer listings: seller title, price, size signals and product link. With a Channel3 key it also adds offers from many other stores and brand sites (adidas, New Balance, Puma, Reebok, Vans, Foot Locker and more), and with eBay keys it adds new fixed-price eBay listings. Similar-but-different models are excluded.
+- **Exact-product comparison.** **Compare offers** expands a card to show that model's direct retailer listings: seller title, price, size signals and product link. With a Channel3 key it also adds offers from many other stores and brand sites (adidas, New Balance, Puma, Reebok, Vans, Foot Locker and more), with eBay keys it adds new fixed-price eBay listings, and with Impact keys it adds affiliate-linked offers from the brands and stores that approved your account. Similar-but-different models are excluded.
 - **Never an empty page.** If a source is out of free lookups, paused or failing, saved results are shown with a clear notice and the search is queued for an automatic refresh.
 - **Watchlist.** Save products. The daily price-history job currently tracks Nike URLs only; other saved links are kept but not refreshed.
 - **Owner dashboard.** `/admin/providers` shows provider budgets, health, the refresh queue, catalog counts and which retailers have actually appeared in results.
@@ -42,7 +42,7 @@ flowchart TD
 
 **Budgets.** Before any paid request, an atomic Postgres function (`reserve_retailer_api_budget`) reserves daily and monthly units together, so concurrent requests cannot overspend. Defaults: PCKT 15/day and 450/month, SerpApi 7/day and 200/month, API.SH 25/day and 1,000/month, Channel3 30/day and 900/month, eBay 3,000/day. A shared request gate keeps PCKT under its 1 request/second limit across Vercel instances. A provider that fails repeatedly is paused with exponential back-off while the others keep working.
 
-**Cost control.** Browsing always queries StockX and GOAT (0.7 PCKT credits); Flight Club and Kicks Crew (1.5) run only while at least half of the day's allowance remains. Gender, size, color, price and sale are applied locally. Comparing a product reuses the retailer URLs already grouped with it and runs no broad search; the only live calls are one optional Channel3 search and one optional eBay search, each cached for 3 hours and never saved to the catalog (both providers ask that offer data not be kept longer).
+**Cost control.** Browsing always queries StockX and GOAT (0.7 PCKT credits); Flight Club and Kicks Crew (1.5) run only while at least half of the day's allowance remains. Gender, size, color, price and sale are applied locally. Comparing a product reuses the retailer URLs already grouped with it and runs no broad search; the only live calls are one optional search each to Channel3, eBay and Impact, each cached for 3 hours and never saved to the catalog (both providers ask that offer data not be kept longer).
 
 **Keeping results fresh.** Incomplete answers are never cached. They go into `catalog_refresh_queue`, and a daily job (`/api/cron/warm-catalog`) completes them, then refreshes popular searches from `lib/warm-seeds.ts`, using at most 40% of the day's budget.
 
@@ -60,6 +60,7 @@ More detail: [docs/free-tier-operations.md](./docs/free-tier-operations.md).
 - [API.SH](https://api.sh/): Nike.com listings in the catalog, legacy Nike endpoints and Nike price history (optional)
 - [Channel3](https://trychannel3.com/): live cross-store offers in Compare (optional)
 - [eBay Browse API](https://developer.ebay.com/): live new eBay listings in Compare (optional)
+- [Impact](https://impact.com/) partner API: affiliate-linked brand and store offers in Compare (optional)
 
 ## Setup
 
@@ -74,6 +75,7 @@ More detail: [docs/free-tier-operations.md](./docs/free-tier-operations.md).
 | `SERPAPI_API_KEY` | [serpapi.com](https://serpapi.com/) free account | Google Shopping merchants such as Foot Locker and Champs |
 | `API_SH_KEY` | [api.sh](https://api.sh/) | Nike.com listings in the catalog, legacy Nike search and the Nike price-history job |
 | `CHANNEL3_API_KEY` | [trychannel3.com](https://trychannel3.com/) free account | Offers from many other stores and brand sites when you press Compare offers |
+| `IMPACT_ACCOUNT_SID`, `IMPACT_AUTH_TOKEN` | Impact dashboard → Account Settings → API | Affiliate-linked offers from the brands and stores that approved your Impact account |
 | `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET` | [developer.ebay.com](https://developer.ebay.com/) free account (production keyset) | New fixed-price eBay listings when you press Compare offers |
 
 Free allowances change; check each dashboard. Without `SERPAPI_API_KEY`, merchant listings are simply omitted. Never prefix a key with `NEXT_PUBLIC_`.
@@ -106,6 +108,8 @@ Without `DATABASE_URL` the catalog returns an error: Neon is required.
 | `CHANNEL3_API_KEY` | Optional | Cross-store offers in Compare |
 | `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET` | Optional | eBay listings in Compare |
 | `EBAY_CAMPAIGN_ID` | Optional | eBay Partner Network campaign id for affiliate links |
+| `IMPACT_ACCOUNT_SID`, `IMPACT_AUTH_TOKEN` | Optional | Impact partner offers in Compare |
+| `IMPACT_DAILY_BUDGET`, `IMPACT_MONTHLY_BUDGET` | Optional | Default 500 and 15000 calls |
 | `EBAY_DAILY_BUDGET`, `EBAY_MONTHLY_BUDGET` | Optional | Default 3000 and 90000 calls |
 | `CRON_SECRET` | Yes | Authorizes the cron jobs and the admin dashboard; use a random 32+ character value |
 | `PCKT_DAILY_BUDGET`, `PCKT_MONTHLY_BUDGET` | Optional | Default 15 and 450 credits |
@@ -172,7 +176,7 @@ lib/
   catalog-store.ts              Normalized catalog persistence
   catalog-queue.ts              Refresh queue
   provider-budget.ts            Atomic daily/monthly budgets
-  channel3.ts  ebay.ts          Channel3 and eBay clients and offer normalization
+  channel3.ts  ebay.ts  impact.ts  Live-offer clients (Channel3, eBay, Impact)
   provider-health.ts            Telemetry and circuit breaker
   query-normalize.ts            Search shorthand expansion
   warm-seeds.ts                 Popular searches kept warm
@@ -191,7 +195,7 @@ vercel.json                     Cron schedule
 - [Free-tier operations](./docs/free-tier-operations.md): limits, fallbacks, tuning, warm-up, dashboard
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v2.5.0](./changelog/v2.5.0.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v2.6.0](./changelog/v2.6.0.md))
 
 ## Data and license
 

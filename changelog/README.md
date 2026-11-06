@@ -4,6 +4,7 @@ Release notes for each Outlet Radar version, newest first. Upgrade instructions 
 
 | Version | Summary |
 |---|---|
+| [v2.6.0](./v2.6.0.md) | Impact partner catalogs (affiliate-linked brand and store offers) in Compare |
 | [v2.5.0](./v2.5.0.md) | eBay listings in Compare, database-free page health check |
 | [v2.4.0](./v2.4.0.md) | Nike.com in the catalog (API.SH), Channel3 cross-store comparison, coverage fill-in |
 | [v2.3.1](./v2.3.1.md) | Admin retailer coverage report |

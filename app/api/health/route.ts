@@ -33,11 +33,12 @@ export async function GET(request: NextRequest) {
     legacyNike: Boolean(process.env.API_SH_KEY),
     channel3: Boolean(process.env.CHANNEL3_API_KEY),
     ebay: Boolean(process.env.EBAY_CLIENT_ID && process.env.EBAY_CLIENT_SECRET),
+    impact: Boolean(process.env.IMPACT_ACCOUNT_SID && process.env.IMPACT_AUTH_TOKEN),
   };
 
   return NextResponse.json({
     service: "outlet-radar",
-    version: "2.5.0",
+    version: "2.6.0",
     status: database === "unavailable" ? "degraded" : "ok",
     database,
     databaseConfigured,
@@ -48,6 +49,7 @@ export async function GET(request: NextRequest) {
       legacyNike: providers.legacyNike ? "configured" : "not_configured",
       channel3: providers.channel3 ? "configured" : "not_configured",
       ebay: providers.ebay ? "configured" : "not_configured",
+      impact: providers.impact ? "configured" : "not_configured",
     },
     checkedAt: new Date().toISOString(),
   }, { status: database === "unavailable" ? 503 : 200 });

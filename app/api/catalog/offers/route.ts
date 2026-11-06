@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { filterOfferSizeLabels, inferListingAudience, isOfferAllowedForAudience } from "@/lib/audience";
 import { persistCatalogSnapshot } from "@/lib/catalog-store";
 import { CHANNEL3_CACHE_HOURS, channel3Candidates, channel3Configured, searchChannel3 } from "@/lib/channel3";
+import { IMPACT_CACHE_HOURS, impactConfigured, impactOffers, searchImpact } from "@/lib/impact";
 import { EBAY_CACHE_HOURS, ebayConfigured, ebayOffers, searchEbay } from "@/lib/ebay";
 import { getProviderCooldown, recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 import { reserveProviderBudget } from "@/lib/provider-budget";
@@ -312,6 +313,7 @@ function sourceKeyConfigured(key: string): boolean {
   if (key === "shopping") return Boolean(process.env.SERPAPI_API_KEY);
   if (key === "channel3") return channel3Configured();
   if (key === "ebay") return ebayConfigured();
+  if (key === "impact") return impactConfigured();
   if (key === "nike") return Boolean(process.env.API_SH_KEY);
   return Boolean(process.env.PCKT_API_KEY);
 }
@@ -404,7 +406,7 @@ export async function POST(request: NextRequest) {
   const sourceNames: Record<OfferSource, string> = {
     stockx: "StockX", goat: "GOAT", flightclub: "Flight Club",
     kickscrew: "Kicks Crew", shopping: "Google Shopping merchants",
-    nike: "Nike.com", channel3: "Channel3 merchants", ebay: "eBay",
+    nike: "Nike.com", channel3: "Channel3 merchants", ebay: "eBay", impact: "Impact partner stores",
   };
   const statuses: SourceStatus[] = (Object.keys(sourceNames) as OfferSource[]).map((source) => {
     const count = offers.filter((offer) => offer.source === source).length;
@@ -487,6 +489,49 @@ export async function POST(request: NextRequest) {
   const ebayIndex = statuses.findIndex((status) => status.key === "ebay");
   if (ebayIndex >= 0) statuses[ebayIndex] = ebayStatus; else statuses.push(ebayStatus);
 
+  // Impact partner catalogs: brand and store feeds from the programs your publisher account has joined
+  // (adidas, New Balance, Puma, Reebok, Vans, ...). Items carry your affiliate tracking link, so they
+  // replace Channel3's plain link for the same store. Live only, like Channel3 and eBay.
+  const impactStatus: SourceStatus = { key: "impact", name: sourceNames.impact, status: "not_configured", results: 0, message: "Add IMPACT_ACCOUNT_SID and IMPACT_AUTH_TOKEN in Vercel to include offers from the stores that have approved your Impact account." };
+  if (impactConfigured()) {
+    const cooldown = await getProviderCooldown("impact");
+    if (cooldown.paused) {
+      Object.assign(impactStatus, { status: "cooldown", message: `Temporarily paused after repeated provider errors${cooldown.disabledUntil ? ` until ${cooldown.disabledUntil}` : ""}.` });
+    } else if (!(await reserveProviderBudget("impact", 1))) {
+      Object.assign(impactStatus, { status: "budget_reached", message: "Daily Impact safety budget reached. Other retailers are still shown." });
+    } else {
+      const startedAt = Date.now();
+      try {
+        // Query words: the longest model words plus one model number; strict matching runs afterwards.
+        const words = productTokens(target.title, target.brand).filter((token) => !/^(?:19|20)\d{2}$/.test(token));
+        const wordTokens = words.filter((token) => !/^\d+(?:\.\d+)?$/.test(token)).sort((a, b) => b.length - a.length).slice(0, 3);
+        const numberToken = words.find((token) => /^\d+(?:\.\d+)?$/.test(token));
+        const queryTokens = [...wordTokens, ...(numberToken ? [numberToken] : [])];
+        const cheapest = new Map<string, MarketplaceOffer>();
+        for (const offer of await impactOffers(await searchImpact(queryTokens, 50))) {
+          if (!channel3Match(offer, target)) continue;
+          const retailerKey = norm(offer.retailer);
+          const current = cheapest.get(retailerKey);
+          if (!current || (offer.price ?? Infinity) < (current.price ?? Infinity)) cheapest.set(retailerKey, offer);
+        }
+        const found = [...cheapest.values()];
+        // Prefer the affiliate link: drop a plain Channel3 offer from the same store.
+        const impactRetailers = new Set(found.map((offer) => norm(offer.retailer)));
+        for (let index = offers.length - 1; index >= 0; index--) {
+          if (offers[index].source === "channel3" && impactRetailers.has(norm(offers[index].retailer))) offers.splice(index, 1);
+        }
+        offers.push(...found);
+        await recordProviderSuccess("impact", Date.now() - startedAt, found.length);
+        Object.assign(impactStatus, { status: "success", results: found.length, message: found.length ? `${found.length} partner store offer(s) matched this exact product. Confirm size and stock on the seller page.` : "No partner store offer matched this exact product (only stores that approved your Impact account are searched)." });
+      } catch (error) {
+        await recordProviderFailure("impact", Date.now() - startedAt, error);
+        Object.assign(impactStatus, { status: "error", message: error instanceof Error ? error.message : "Impact request failed." });
+      }
+    }
+  }
+  const impactIndex = statuses.findIndex((status) => status.key === "impact");
+  if (impactIndex >= 0) statuses[impactIndex] = impactStatus; else statuses.push(impactStatus);
+
   // Apply the audience selected by the shopper to each retailer listing, not
   // merely to the grouped catalog card. GS/PS/youth variants are excluded from
   // adult comparisons even when a marketplace grouped them under one silhouette.
@@ -520,8 +565,9 @@ export async function POST(request: NextRequest) {
   try { await persistCatalogSnapshot([canonicalProduct], results); } catch { /* normalized inventory is an additive index; offers remain visible */ }
   // Channel3 data is cached for hours, not days. A Channel3 failure or exhausted budget
   // is not cached so the next Compare can retry once it recovers.
-  const liveIncomplete = [channel3Status, ebayStatus].some((status) => ["budget_reached", "cooldown", "error"].includes(status.status));
-  const ttlHours = channel3Status.status === "success" ? Math.min(CHANNEL3_CACHE_HOURS, EBAY_CACHE_HOURS) : ebayStatus.status === "success" ? EBAY_CACHE_HOURS : CACHE_HOURS;
+  const liveSources = [channel3Status, ebayStatus, impactStatus];
+  const liveIncomplete = liveSources.some((status) => ["budget_reached", "cooldown", "error"].includes(status.status));
+  const ttlHours = liveSources.some((status) => status.status === "success") ? Math.min(CHANNEL3_CACHE_HOURS, EBAY_CACHE_HOURS, IMPACT_CACHE_HOURS) : CACHE_HOURS;
   if (!liveIncomplete) {
     try { await writeCache(cacheKey, query, results, statuses, ttlHours); } catch { /* keep live offers visible if caching fails */ }
   }

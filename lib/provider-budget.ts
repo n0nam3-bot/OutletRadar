@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/db";
 
-export type BudgetProvider = "pckt" | "serpapi" | "apish" | "channel3" | "ebay";
+export type BudgetProvider = "pckt" | "serpapi" | "apish" | "channel3" | "ebay" | "impact";
 
 function envNumber(name: string, fallback: number, min: number, max: number): number {
   const raw = process.env[name];
@@ -38,6 +38,11 @@ export const PROVIDER_BUDGETS: Record<BudgetProvider, { monthly: number; daily: 
   ebay: {
     monthly: envNumber("EBAY_MONTHLY_BUDGET", 90_000, 0, 100_000),
     daily: envNumber("EBAY_DAILY_BUDGET", 3_000, 0, 10_000),
+  },
+  // Impact does not publish a fixed free quota; this is a conservative application ceiling.
+  impact: {
+    monthly: envNumber("IMPACT_MONTHLY_BUDGET", 15_000, 0, 100_000),
+    daily: envNumber("IMPACT_DAILY_BUDGET", 500, 0, 10_000),
   },
 };
 
