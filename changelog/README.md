@@ -4,6 +4,7 @@ Release notes for each Outlet Radar version, newest first. Upgrade instructions 
 
 | Version | Summary |
 |---|---|
+| [v2.4.0](./v2.4.0.md) | Nike.com in the catalog (API.SH), Channel3 cross-store comparison, coverage fill-in |
 | [v2.3.1](./v2.3.1.md) | Admin retailer coverage report |
 | [v2.3.0](./v2.3.0.md) | Never-empty search, no caching of incomplete results, refresh queue and daily warm-up, configurable budgets |
 | [v2.2.0](./v2.2.0.md) | Shared provider snapshots, daily + monthly budget protection, size persistence fixes |

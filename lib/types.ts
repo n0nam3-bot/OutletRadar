@@ -34,7 +34,7 @@ export type SearchResponse = {
   source: "api.sh";
 };
 
-export type MarketplaceProvider = "stockx" | "goat" | "flightclub" | "kickscrew" | "shopping";
+export type MarketplaceProvider = "stockx" | "goat" | "flightclub" | "kickscrew" | "shopping" | "nike" | "channel3";
 export type MarketplaceOffer = {
   id: string;
   source: MarketplaceProvider;

@@ -1,6 +1,6 @@
 import { getDb } from "@/lib/db";
 
-export type BudgetProvider = "pckt" | "serpapi" | "apish";
+export type BudgetProvider = "pckt" | "serpapi" | "apish" | "channel3";
 
 function envNumber(name: string, fallback: number, min: number, max: number): number {
   const raw = process.env[name];
@@ -28,6 +28,11 @@ export const PROVIDER_BUDGETS: Record<BudgetProvider, { monthly: number; daily: 
   apish: {
     monthly: envNumber("APISH_MONTHLY_BUDGET", 1000, 0, 100_000),
     daily: envNumber("APISH_DAILY_BUDGET", 25, 0, 10_000),
+  },
+  // Channel3 free tier: 1,000 credits/month, 1 credit per search. 900/30 = 30 per day.
+  channel3: {
+    monthly: envNumber("CHANNEL3_MONTHLY_BUDGET", 900, 0, 100_000),
+    daily: envNumber("CHANNEL3_DAILY_BUDGET", 30, 0, 10_000),
   },
 };
 

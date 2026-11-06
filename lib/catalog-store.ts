@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { getDb } from "@/lib/db";
 import type { CatalogBrowseProduct, CatalogListing, MarketplaceOffer, MarketplaceSizeQuote } from "@/lib/types";
 
-const SOURCE_KEYS = new Set(["stockx", "goat", "flightclub", "kickscrew", "shopping"]);
+// Sources whose offers are saved to the normalized catalog (24 h expiry). "channel3" is
+// deliberately absent: Channel3's terms ask that prices, availability and offer URLs are
+// not kept for more than a few hours, so its offers live only in short-lived caches.
+const SOURCE_KEYS = new Set(["stockx", "goat", "flightclub", "kickscrew", "shopping", "nike"]);
 
 function norm(value: string): string {
   return value.toLowerCase().normalize("NFKD").replace(/[’']/g, "").replace(/[^a-z0-9.]+/g, " ").replace(/\s+/g, " ").trim();

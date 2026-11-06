@@ -1,6 +1,6 @@
 # Outlet Radar
 
-A multi-brand product discovery and price-comparison site for sneakers, apparel and accessories. Search by model, browse catalogs from StockX, GOAT, Flight Club, Kicks Crew and Google Shopping merchants (such as Foot Locker, Champs Sports and JD Sports), and compare each product's online listings side by side.
+A multi-brand product discovery and price-comparison site for sneakers, apparel and accessories. Search by model, browse catalogs from StockX, GOAT, Flight Club, Kicks Crew, Nike.com and Google Shopping merchants (such as Foot Locker, Champs Sports and JD Sports), and compare each product's online listings side by side, including offers from many other stores and brand sites.
 
 Built with Next.js 15, Vercel and Neon Postgres, and designed to keep working on **free plans**: results are cached and shared between visitors, provider usage is capped by atomic daily and monthly budgets, and a search is never left blank when a free allowance runs out.
 
@@ -13,7 +13,7 @@ Built with Next.js 15, Vercel and Neon Postgres, and designed to keep working on
 - **Structured discovery.** Choose an item type, optional brand, audience and release year, and describe the model (at least two characters). Shorthand such as `aj1`, `af1` or `nb 550` is understood.
 - **Local refinements.** Size, color, price range and sale-only filter the results already on screen; they never spend provider credits.
 - **Grouped products.** Listings from different retailers that describe the same model are combined into one card. Conflicting known year, audience or color keeps variants apart.
-- **Exact-product comparison.** **Compare offers** expands a card to show that model's direct retailer listings: seller title, price, size signals and product link. Similar-but-different models are excluded.
+- **Exact-product comparison.** **Compare offers** expands a card to show that model's direct retailer listings: seller title, price, size signals and product link. With a Channel3 key it also adds offers from many other stores and brand sites (adidas, New Balance, Puma, Reebok, Vans, Foot Locker and more). Similar-but-different models are excluded.
 - **Never an empty page.** If a source is out of free lookups, paused or failing, saved results are shown with a clear notice and the search is queued for an automatic refresh.
 - **Watchlist.** Save products. The daily price-history job currently tracks Nike URLs only; other saved links are kept but not refreshed.
 - **Owner dashboard.** `/admin/providers` shows provider budgets, health, the refresh queue, catalog counts and which retailers have actually appeared in results.
@@ -38,11 +38,11 @@ flowchart TD
   J -.-> H
 ```
 
-**Lookup layers.** Every search checks, in order: the exact-query cache (12 h), the shared normalized catalog (`canonical_products`, `retailer_offers`, `retailer_offer_sizes`), provider snapshots (24 h per PCKT source, 6 h for Google Shopping), and finally live providers. A product found by one visitor is reusable by all.
+**Lookup layers.** Every search checks, in order: the exact-query cache (12 h), the shared normalized catalog (`canonical_products`, `retailer_offers`, `retailer_offer_sizes`), provider snapshots (24 h per PCKT source, 12 h for Nike.com, 6 h for Google Shopping), and finally live providers. A search answered from the shared catalog that is missing a fresh snapshot for a configured source is queued so the warm-up job can add the missing retailers. A product found by one visitor is reusable by all.
 
-**Budgets.** Before any paid request, an atomic Postgres function (`reserve_retailer_api_budget`) reserves daily and monthly units together, so concurrent requests cannot overspend. Defaults: PCKT 15/day and 450/month, SerpApi 7/day and 200/month, API.SH 25/day and 1,000/month. A shared request gate keeps PCKT under its 1 request/second limit across Vercel instances. A provider that fails repeatedly is paused with exponential back-off while the others keep working.
+**Budgets.** Before any paid request, an atomic Postgres function (`reserve_retailer_api_budget`) reserves daily and monthly units together, so concurrent requests cannot overspend. Defaults: PCKT 15/day and 450/month, SerpApi 7/day and 200/month, API.SH 25/day and 1,000/month, Channel3 30/day and 900/month. A shared request gate keeps PCKT under its 1 request/second limit across Vercel instances. A provider that fails repeatedly is paused with exponential back-off while the others keep working.
 
-**Cost control.** Browsing always queries StockX and GOAT (0.7 PCKT credits); Flight Club and Kicks Crew (1.5) run only while at least half of the day's allowance remains. Gender, size, color, price and sale are applied locally. Comparing a product reuses the retailer URLs already grouped with it and runs no broad search.
+**Cost control.** Browsing always queries StockX and GOAT (0.7 PCKT credits); Flight Club and Kicks Crew (1.5) run only while at least half of the day's allowance remains. Gender, size, color, price and sale are applied locally. Comparing a product reuses the retailer URLs already grouped with it and runs no broad search; the only live call is one optional Channel3 search, cached for 3 hours and never saved to the catalog (Channel3 asks that offer data not be kept longer).
 
 **Keeping results fresh.** Incomplete answers are never cached. They go into `catalog_refresh_queue`, and a daily job (`/api/cron/warm-catalog`) completes them, then refreshes popular searches from `lib/warm-seeds.ts`, using at most 40% of the day's budget.
 
@@ -57,7 +57,8 @@ More detail: [docs/free-tier-operations.md](./docs/free-tier-operations.md).
 - Neon serverless Postgres
 - [PCKT](https://pckt.sh/): StockX, GOAT, Flight Club and Kicks Crew catalogs
 - [SerpApi](https://serpapi.com/): Google Shopping merchants (optional)
-- [API.SH](https://api.sh/): legacy Nike endpoints and Nike price history (optional)
+- [API.SH](https://api.sh/): Nike.com listings in the catalog, legacy Nike endpoints and Nike price history (optional)
+- [Channel3](https://trychannel3.com/): live cross-store offers in Compare (optional)
 
 ## Setup
 
@@ -65,12 +66,13 @@ More detail: [docs/free-tier-operations.md](./docs/free-tier-operations.md).
 1. Create a Neon project and copy its **pooled** connection string.
 2. Open **SQL Editor** and run the whole of [`db/schema.sql`](./db/schema.sql). It is idempotent and creates every table and function, including the budget ledger and refresh queue.
 
-### 2. Get provider keys (all optional, but you need at least PCKT for the main catalog)
+### 2. Get provider keys (all optional, but PCKT is needed for the marketplace catalog)
 | Key | Where | Enables |
 |---|---|---|
 | `PCKT_API_KEY` | [pckt.sh](https://pckt.sh/) free account | StockX, GOAT, Flight Club and Kicks Crew discovery and comparison |
 | `SERPAPI_API_KEY` | [serpapi.com](https://serpapi.com/) free account | Google Shopping merchants such as Foot Locker and Champs |
-| `API_SH_KEY` | [api.sh](https://api.sh/) | Legacy Nike search and the Nike price-history job |
+| `API_SH_KEY` | [api.sh](https://api.sh/) | Nike.com listings in the catalog, legacy Nike search and the Nike price-history job |
+| `CHANNEL3_API_KEY` | [trychannel3.com](https://trychannel3.com/) free account | Offers from many other stores and brand sites when you press Compare offers |
 
 Free allowances change; check each dashboard. Without `SERPAPI_API_KEY`, merchant listings are simply omitted. Never prefix a key with `NEXT_PUBLIC_`.
 
@@ -98,11 +100,13 @@ Without `DATABASE_URL` the catalog returns an error: Neon is required.
 | `DATABASE_URL` | Yes | Neon pooled connection string |
 | `PCKT_API_KEY` | For the main catalog | PCKT bearer token |
 | `SERPAPI_API_KEY` | Optional | Google Shopping merchants |
-| `API_SH_KEY` | Optional | Legacy Nike endpoints and price history |
+| `API_SH_KEY` | Optional | Nike.com catalog source, legacy Nike endpoints and price history |
+| `CHANNEL3_API_KEY` | Optional | Cross-store offers in Compare |
 | `CRON_SECRET` | Yes | Authorizes the cron jobs and the admin dashboard; use a random 32+ character value |
 | `PCKT_DAILY_BUDGET`, `PCKT_MONTHLY_BUDGET` | Optional | Default 15 and 450 credits |
 | `SERPAPI_DAILY_BUDGET`, `SERPAPI_MONTHLY_BUDGET` | Optional | Default 7 and 200 searches |
 | `APISH_DAILY_BUDGET`, `APISH_MONTHLY_BUDGET` | Optional | Default 25 and 1000 requests |
+| `CHANNEL3_DAILY_BUDGET`, `CHANNEL3_MONTHLY_BUDGET` | Optional | Default 30 and 900 searches |
 | `WARM_DAILY_SHARE` | Optional | Share of each daily budget the warm-up may use, default `0.4` |
 | `MAX_DAILY_PRICE_CHECKS` | Optional | Nike price checks per run, default and maximum 10 |
 | `RATE_LIMIT_SALT` | Legacy | Retained for compatibility; unused |
@@ -163,6 +167,7 @@ lib/
   catalog-store.ts              Normalized catalog persistence
   catalog-queue.ts              Refresh queue
   provider-budget.ts            Atomic daily/monthly budgets
+  channel3.ts                   Channel3 client and offer normalization
   provider-health.ts            Telemetry and circuit breaker
   query-normalize.ts            Search shorthand expansion
   warm-seeds.ts                 Popular searches kept warm
@@ -181,7 +186,7 @@ vercel.json                     Cron schedule
 - [Free-tier operations](./docs/free-tier-operations.md): limits, fallbacks, tuning, warm-up, dashboard
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v2.3.1](./changelog/v2.3.1.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v2.4.0](./changelog/v2.4.0.md))
 
 ## Data and license
 

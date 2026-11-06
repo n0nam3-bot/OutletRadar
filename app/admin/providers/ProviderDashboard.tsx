@@ -40,7 +40,7 @@ function dateLabel(value?: string | null): string {
   return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString();
 }
 function providerLabel(value: string): string {
-  return ({ stockx: "StockX", goat: "GOAT", flightclub: "Flight Club", kickscrew: "Kicks Crew", shopping: "Google Shopping", apish: "API.SH" } as Record<string, string>)[value] || value;
+  return ({ stockx: "StockX", goat: "GOAT", flightclub: "Flight Club", kickscrew: "Kicks Crew", shopping: "Google Shopping", apish: "API.SH (Nike)", channel3: "Channel3" } as Record<string, string>)[value] || value;
 }
 
 export default function ProviderAdminPage() {

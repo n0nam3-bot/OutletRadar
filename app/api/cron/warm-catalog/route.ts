@@ -58,7 +58,7 @@ async function dueSeeds(limit: number): Promise<Job[]> {
 export async function GET(request: NextRequest) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   if (!getDb()) return NextResponse.json({ error: "Warm-up requires DATABASE_URL." }, { status: 503 });
-  if (!process.env.PCKT_API_KEY && !process.env.SERPAPI_API_KEY) {
+  if (!process.env.PCKT_API_KEY && !process.env.SERPAPI_API_KEY && !process.env.API_SH_KEY) {
     return NextResponse.json({ ok: true, skipped: "No provider keys are configured, so there is nothing to warm." });
   }
 

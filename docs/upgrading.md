@@ -19,12 +19,19 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 
 | Version | Migration to run | Required? |
 |---|---|---|
+| v2.4.0 | None | No database change. |
 | v2.3.0 | `004_catalog_refresh_queue.sql` | Recommended. The app works without it, but the refresh queue (and its dashboard card) stay disabled. |
 | v2.2.0 | `003_provider_budget_and_size_diagnostics.sql` | Required. Adds the daily budget ledger and the atomic reservation function. |
 | v2.1.0 | `002_catalog_inventory.sql` | Required. Adds canonical products, offers, sizes and provider health. |
 | v1.7 | `001_multi_retailer.sql` | Required. Retailer search cache and monthly usage. |
 
 For a brand-new database, run the whole of `db/schema.sql` instead of the individual migrations. It is idempotent and always reflects the current schema.
+
+## Upgrading from v2.3.x to v2.4.0
+
+1. No migration is needed. Upload the v2.4 ZIP and wait for the deployment.
+2. `API_SH_KEY` (already set if you use the Nike features) now also adds Nike.com listings to Nike and Jordan searches.
+3. Optional: create a free account at https://trychannel3.com, copy the API key, and add it in Vercel as `CHANNEL3_API_KEY`. Redeploy. Then open a product and press **Compare offers**; the status should list "Channel3 merchants".
 
 ## Upgrading from v2.2.0 to v2.3.0
 

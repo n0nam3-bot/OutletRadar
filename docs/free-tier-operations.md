@@ -8,7 +8,8 @@ Outlet Radar is designed to keep working on free plans of Vercel, Neon, PCKT and
 |---|---|---|
 | PCKT | 500 credits/month, 1 request/second | App ceiling 450/month and 15/day. StockX 0.4, GOAT 0.3, Flight Club 1.0, Kicks Crew 0.5 per search. |
 | SerpApi | 250 searches/month | App ceiling 200/month and 7/day. One search per uncached query. |
-| API.SH | Plan-dependent | App ceiling 1,000/month and 25/day. Legacy Nike features only. |
+| API.SH | Plan-dependent | App ceiling 1,000/month and 25/day. One request per uncached Nike or Jordan search (Nike.com listings), plus the legacy Nike features. |
+| Channel3 | 1,000 credits/month (verify in your dashboard) | App ceiling 900/month and 30/day. One search per Compare offers click, cached 3 hours. |
 | Vercel Hobby | Cron jobs run at most once per day, within the scheduled hour | Two daily crons: price check and catalog warm-up. |
 | Neon Free | 0.5 GB storage and 100 compute-hours per project per month; compute is free only while it scales to zero | Everything is cached in Neon; keep it idle when possible. |
 
@@ -18,7 +19,7 @@ Allowances change; the app's ceilings are *safety margins under* them, not copie
 
 1. **Exact-query cache** (12 h) in `retailer_search_cache`.
 2. **Shared catalog** in `canonical_products` / `retailer_offers`: anything any visitor already discovered. Every query word must match, and model numbers match exactly (`Jordan 1` never matches `Jordan 14`).
-3. **Provider snapshots** (24 h per PCKT source, 6 h for Google Shopping), reused across audience and year filters.
+3. **Provider snapshots** (24 h per PCKT source, 12 h for Nike.com, 6 h for Google Shopping), reused across audience and year filters.
 4. **Live providers**, only if the daily/monthly budget allows and the source is not paused after repeated errors.
 5. **Fallbacks if a source cannot be queried:** its expired snapshot (up to 30 days old) labelled *stale*; if nothing matches at all, a saved copy of the exact search; then the closest saved products. The page shows a notice explaining what the visitor is seeing.
 
@@ -28,6 +29,17 @@ An incomplete answer is **never** written to the 12-hour cache, and the search i
 - StockX and GOAT (0.7 credits) always run on a browse. Flight Club and Kicks Crew (1.5 combined) run only while at least half of today's PCKT allowance remains. Skipped sources are added later by the warm-up job.
 - Shorthand (`aj1`, `af1`, `am90`, `nb`, `dunks`, `yeezys`...) is expanded before caching, so equivalent searches cost one lookup. Extend the list in `lib/query-normalize.ts`.
 - Size, color, price, audience and sale refinements are applied locally and never spend credits.
+
+## Other stores and brands: what is available
+
+Most brands (adidas, New Balance, Puma, Converse, Reebok, Vans) publish no free public product API, and scraping their sites breaks their terms. The legitimate routes are:
+
+- **Channel3** (built in): one API that matches a product to offers at many stores and brand sites. It is used only when someone presses **Compare offers**, so it costs one credit per comparison, and results are cached for 3 hours because its terms ask that offer data not be stored longer.
+- **Google Shopping via SerpApi** (built in): returns whichever merchants Google lists for a query.
+- **Affiliate product feeds** (planned, see the roadmap): the networks you apply to, such as Impact, supply bulk product data for approved brands and stores.
+- **eBay Browse API** (planned): a large free daily quota for eBay listings.
+
+Use `/admin/providers` → **Retailer coverage** to see which stores have actually appeared in results.
 
 ## Scheduled warm-up
 
@@ -55,6 +67,7 @@ All optional; set them in Vercel → Settings → Environment Variables.
 | `PCKT_DAILY_BUDGET` / `PCKT_MONTHLY_BUDGET` | 15 / 450 | Credits |
 | `SERPAPI_DAILY_BUDGET` / `SERPAPI_MONTHLY_BUDGET` | 7 / 200 | Searches |
 | `APISH_DAILY_BUDGET` / `APISH_MONTHLY_BUDGET` | 25 / 1000 | Requests |
+| `CHANNEL3_DAILY_BUDGET` / `CHANNEL3_MONTHLY_BUDGET` | 30 / 900 | Searches |
 | `WARM_DAILY_SHARE` | 0.4 | Fraction of each daily budget the warm-up may use (0.05-0.9) |
 
 If you move to a paid provider plan, raise the monthly and daily values to match.

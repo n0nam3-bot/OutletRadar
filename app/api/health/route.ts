@@ -23,11 +23,12 @@ export async function GET() {
     pckt: Boolean(process.env.PCKT_API_KEY),
     serpapi: Boolean(process.env.SERPAPI_API_KEY),
     legacyNike: Boolean(process.env.API_SH_KEY),
+    channel3: Boolean(process.env.CHANNEL3_API_KEY),
   };
 
   return NextResponse.json({
     service: "outlet-radar",
-    version: "2.3.1",
+    version: "2.4.0",
     status: database === "unavailable" ? "degraded" : "ok",
     database,
     providers: {

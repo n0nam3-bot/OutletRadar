@@ -4,6 +4,9 @@ import { persistCatalogSnapshot } from "@/lib/catalog-store";
 import { getProviderCooldown, recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 import { getProviderBudgetStatus, reserveProviderBudget, warmDailyShare, type BudgetProvider } from "@/lib/provider-budget";
 import { canonicalQuery } from "@/lib/query-normalize";
+import { nikeApiRequest, normalizeNikeProduct, productArray } from "@/lib/nike";
+import { relevantToQuery } from "@/lib/search-match";
+import type { NikeProduct } from "@/lib/types";
 import { enqueueCatalogRefresh } from "@/lib/catalog-queue";
 import type { CatalogBrowseCategory, CatalogBrowseProduct, CatalogListing, MarketplaceSourceStatus } from "@/lib/types";
 
@@ -855,6 +858,33 @@ async function enrichMissingCatalogImages(products: CatalogBrowseProduct[], rese
 export type CatalogReply = { status: number; body: Record<string, unknown> };
 function reply(body: Record<string, unknown>, status = 200): CatalogReply { return { status, body }; }
 
+/** Nike.com (via API.SH) is only worth a request for Nike-family searches. */
+function nikeRelevant(brand: string, query: string): boolean {
+  if (brand === "nike" || brand === "jordan") return true;
+  return brand === "all" && /\b(nike|jordan|air max|air force|dunk|pegasus|vomero|blazer|cortez)\b/i.test(query);
+}
+
+function normalizeNikeListing(product: NikeProduct, brandFilter: string, category: CatalogBrowseCategory): InternalListing | null {
+  const mapped: CatalogBrowseCategory = product.category === "Shoes" ? "sneakers" : product.category === "Apparel" ? "apparel" : product.category === "Accessories" ? "accessories" : "all";
+  if (category !== "all" && mapped !== category) return null;
+  const brand = /\bjordan\b/i.test(product.title) ? "Jordan" : "Nike";
+  if (!matchesBrand(brand, product.title, brandFilter)) return null;
+  return {
+    source: "nike", retailer: "Nike.com", title: product.title, url: product.url, brand, category: mapped,
+    imageUrl: product.imageUrl, styleCode: product.styleCode, providerProductId: product.id,
+    price: product.price, originalPrice: product.fullPrice, currency: product.currency || "USD",
+    sizes: product.sizes?.map((size) => size.label).filter(Boolean), gender: product.gender, onSale: product.onSale,
+  };
+}
+
+/** Whether a configured source's API key is present (used to re-query sources that were "not_configured" when cached). */
+function sourceKeyConfigured(key: string | undefined): boolean {
+  if (key === "shopping") return Boolean(process.env.SERPAPI_API_KEY);
+  if (key === "nike") return Boolean(process.env.API_SH_KEY);
+  if (key === "channel3") return Boolean(process.env.CHANNEL3_API_KEY);
+  return Boolean(process.env.PCKT_API_KEY);
+}
+
 /** Source statuses that mean "this answer is incomplete or out of date". Such
  * results are never written to the 12-hour exact-query cache, and the search is
  * queued so the warm-up job can complete it. */
@@ -943,11 +973,12 @@ export async function discoverCatalog(params: URLSearchParams, options: { mode?:
     ? (queryParts.join(" ") || "sneakers")
     : [...queryParts, typeLabel(category)].filter(Boolean).join(" ") || typeLabel(category);
   const cacheKey = catalogCacheKey(category, brandValue, genderValue, releaseYear, userQuery);
+  const coverageTerm = searchTerm;
 
   if (!warm) {
     try {
       const cached = await readCache(cacheKey);
-      const newlyConfiguredSource = cached?.sources.some((source) => source.status === "not_configured" && ((source.key !== "shopping" && Boolean(pcktKey)) || (source.key === "shopping" && Boolean(serpKey))));
+      const newlyConfiguredSource = cached?.sources.some((source) => source.status === "not_configured" && sourceKeyConfigured(source.key));
       if (cached && !newlyConfiguredSource) {
         try { await persistCatalogSnapshot(cached.products); } catch { /* normalized store is an additive index; cache results remain usable */ }
         return reply({ category, brand: brandValue, gender: genderValue, releaseYear: releaseYear ?? null, products: cached.products, sources: cached.sources, cached: true, cachedAt: cached.cachedAt, cacheHours: CACHE_HOURS, note: "Catalog names are discovery records, not proof of current stock." });
@@ -965,6 +996,26 @@ export async function discoverCatalog(params: URLSearchParams, options: { mode?:
         const storedSources = [{ key: "catalog", name: "Outlet Radar catalog", status: "success" as const, results: stored.products.length, message: "Loaded from Outlet Radar's shared catalog. Retailer offer details are refreshed when compared." }];
         // Read-through cache the database result for this exact filter combination.
         try { await writeCache(cacheKey, `catalog-db: ${category} / ${brandValue} / ${userQuery}`, stored.products, storedSources); } catch { /* database catalog results remain usable */ }
+        // Quietly queue a full refresh when a configured source has no fresh snapshot for this
+        // search, so retailers missing from an older stored result are added by the warm-up job.
+        try {
+          const wanted: string[] = [];
+          for (const source of pcktSources) {
+            if (pcktKey && (category === "all" || source.categories.includes(category))) wanted.push(createHash("sha256").update(`provider-catalog:v1:${source.key}:${category}:${brandValue}:${norm(coverageTerm || "sneakers")}`).digest("hex"));
+          }
+          if (serpKey) wanted.push(createHash("sha256").update(`provider-catalog:v1:shopping:${category}:${brandValue}:${norm(coverageTerm || "sneakers")}`).digest("hex"));
+          if (process.env.API_SH_KEY && nikeRelevant(brandValue, userQuery)) wanted.push(createHash("sha256").update(`provider-catalog:v1:nike:${category}:${brandValue}:${norm(coverageTerm || "nike")}`).digest("hex"));
+          const sqlCoverage = getDb();
+          if (sqlCoverage && wanted.length) {
+            const fresh = await sqlCoverage`
+              SELECT COUNT(*)::int AS n FROM retailer_search_cache
+              WHERE cache_key IN (SELECT jsonb_array_elements_text(${JSON.stringify(wanted)}::jsonb)) AND expires_at > NOW()
+            ` as Array<{ n: number }>;
+            if (Number(fresh[0]?.n ?? 0) < wanted.length) {
+              await enqueueCatalogRefresh({ cacheKey, category, brand: brandValue, gender: genderValue, releaseYear, query: userQuery, reason: "coverage" });
+            }
+          }
+        } catch { /* coverage queueing is best-effort */ }
         return reply({
           category, brand: brandValue, gender: genderValue, releaseYear: releaseYear ?? null,
           query: userQuery, products: stored.products,
@@ -1054,6 +1105,54 @@ export async function discoverCatalog(params: URLSearchParams, options: { mode?:
       const message = error instanceof Error ? error.message : "Catalog provider request failed.";
       if (await fallbackToSaved(source.key, source.name, sourceCacheKey, "The provider request failed.")) continue;
       sources.push({ key: source.key, name: source.name, status: "error", results: 0, message });
+    }
+  }
+
+  // Nike.com direct (API.SH). Only for Nike-family searches; 1 request per uncached search.
+  if (nikeRelevant(brandValue, userQuery)) {
+    const nikeName = "Nike.com";
+    const nikeSnapshotKey = createHash("sha256").update(`provider-catalog:v1:nike:${category}:${brandValue}:${norm(searchTerm || "nike")}`).digest("hex");
+    let nikeSnapshot: InternalListing[] | null = null;
+    try { nikeSnapshot = await readProviderSnapshot(nikeSnapshotKey); } catch { nikeSnapshot = null; }
+    if (nikeSnapshot) {
+      const found = catalogAudienceFilter(nikeSnapshot, genderValue, releaseYear);
+      listings.push(...found);
+      sources.push({ key: "nike", name: nikeName, status: "cached", results: found.length, message: "Reused the shared Nike.com snapshot; no API.SH request used." });
+    } else if (!process.env.API_SH_KEY) {
+      sources.push({ key: "nike", name: nikeName, status: "not_configured", results: 0, message: "Add API_SH_KEY in Vercel to include Nike.com listings." });
+    } else if ((await getProviderCooldown("apish")).paused) {
+      if (!(await fallbackToSaved("nike", nikeName, nikeSnapshotKey, "Temporarily paused after repeated provider errors."))) {
+        sources.push({ key: "nike", name: nikeName, status: "cooldown", results: 0, message: "Temporarily paused after repeated API.SH errors." });
+      }
+    } else if (!(await reserve("apish", 1))) {
+      if (!(await fallbackToSaved("nike", nikeName, nikeSnapshotKey, "Today's free lookup allowance is used up."))) {
+        sources.push({ key: "nike", name: nikeName, status: "budget_reached", results: 0, message: "Daily or monthly API.SH safety budget reached. Saved catalog records remain available." });
+      }
+    } else {
+      const providerStartedAt = Date.now();
+      try {
+        const payload = await nikeApiRequest<unknown>("/nike/v1/search", { q: searchTerm || "nike", country: "US" });
+        const root = payload as Record<string, unknown>;
+        if (root && root.success === false) throw new Error("The Nike product provider could not complete this search.");
+        const snapshot = productArray(payload)
+          .map(normalizeNikeProduct)
+          .filter((item): item is NikeProduct => Boolean(item))
+          .filter((item) => relevantToQuery(item, userQuery))
+          .map((item) => normalizeNikeListing(item, brandValue, category))
+          .filter((item): item is InternalListing => Boolean(item))
+          .slice(0, 100);
+        await recordProviderSuccess("apish", Date.now() - providerStartedAt, snapshot.length);
+        try { await writeProviderSnapshot(nikeSnapshotKey, searchTerm, snapshot, 12); } catch { /* keep live results */ }
+        const found = catalogAudienceFilter(snapshot, genderValue, releaseYear);
+        listings.push(...found);
+        sources.push({ key: "nike", name: nikeName, status: "success", results: found.length, message: found.length ? `${found.length} Nike.com product(s) found. Size and stock must be confirmed on nike.com.` : "Nike.com returned no products matching this search." });
+      } catch (error) {
+        await recordProviderFailure("apish", Date.now() - providerStartedAt, error);
+        const message = error instanceof Error ? error.message : "Nike product request failed.";
+        if (!(await fallbackToSaved("nike", nikeName, nikeSnapshotKey, "The provider request failed."))) {
+          sources.push({ key: "nike", name: nikeName, status: "error", results: 0, message });
+        }
+      }
     }
   }
 

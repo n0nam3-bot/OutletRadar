@@ -2,7 +2,9 @@
  * Retailers the owner expects to see in results. Used only by the admin
  * "Retailer coverage" report to compare what has actually been stored in
  * `retailer_offers` against this list. It does not filter or change search
- * results. `patterns` are matched (case-insensitively) against the seller name
+ * results. Channel3 offers are intentionally not saved to the catalog (see lib/channel3.ts),
+ * so retailers that arrive only through Channel3 appear in Compare offers but not in this report.
+ * `patterns` are matched (case-insensitively) against the seller name
  * the provider returned.
  */
 export type RetailerTarget = { name: string; patterns: RegExp[]; via: string };
@@ -12,16 +14,16 @@ export const RETAILER_TARGETS: RetailerTarget[] = [
   { name: "GOAT", patterns: [/^goat$/i, /\bgoat\b/i], via: "PCKT" },
   { name: "Flight Club", patterns: [/flight\s?club/i], via: "PCKT" },
   { name: "Kicks Crew", patterns: [/kicks\s?crew/i], via: "PCKT" },
-  { name: "Nike", patterns: [/^nike(\.com)?$/i, /\bnike\b.*(store|\.com)/i], via: "Google Shopping" },
-  { name: "Foot Locker", patterns: [/foot\s?locker/i], via: "Google Shopping" },
-  { name: "JD Sports", patterns: [/\bjd\s?sports\b/i], via: "Google Shopping" },
-  { name: "Jimmy Jazz", patterns: [/jimmy\s?jazz/i], via: "Google Shopping" },
-  { name: "Champs Sports", patterns: [/champs/i], via: "Google Shopping" },
-  { name: "Finish Line", patterns: [/finish\s?line/i], via: "Google Shopping" },
-  { name: "Snipes USA", patterns: [/snipes/i], via: "Google Shopping" },
-  { name: "Macy's", patterns: [/macy/i], via: "Google Shopping" },
-  { name: "Bloomingdale's", patterns: [/bloomingdale/i], via: "Google Shopping" },
-  { name: "eBay", patterns: [/ebay/i], via: "Google Shopping" },
+  { name: "Nike", patterns: [/^nike(\.com)?$/i, /\bnike\b.*(store|\.com)/i], via: "API.SH (Nike.com)" },
+  { name: "Foot Locker", patterns: [/foot\s?locker/i], via: "Google Shopping; Compare adds Channel3" },
+  { name: "JD Sports", patterns: [/\bjd\s?sports\b/i], via: "Google Shopping; Compare adds Channel3" },
+  { name: "Jimmy Jazz", patterns: [/jimmy\s?jazz/i], via: "Google Shopping; Compare adds Channel3" },
+  { name: "Champs Sports", patterns: [/champs/i], via: "Google Shopping; Compare adds Channel3" },
+  { name: "Finish Line", patterns: [/finish\s?line/i], via: "Google Shopping; Compare adds Channel3" },
+  { name: "Snipes USA", patterns: [/snipes/i], via: "Google Shopping; Compare adds Channel3" },
+  { name: "Macy's", patterns: [/macy/i], via: "Google Shopping; Compare adds Channel3" },
+  { name: "Bloomingdale's", patterns: [/bloomingdale/i], via: "Google Shopping; Compare adds Channel3" },
+  { name: "eBay", patterns: [/ebay/i], via: "Google Shopping; Compare adds Channel3" },
 ];
 
 export type RetailerCoverageRow = { retailer: string; source: string; offers: number; products: number; lastSeenAt: string | null };

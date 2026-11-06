@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { filterOfferSizeLabels, inferListingAudience, isOfferAllowedForAudience } from "@/lib/audience";
 import { persistCatalogSnapshot } from "@/lib/catalog-store";
+import { CHANNEL3_CACHE_HOURS, channel3Candidates, channel3Configured, searchChannel3 } from "@/lib/channel3";
+import { getProviderCooldown, recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
+import { reserveProviderBudget } from "@/lib/provider-budget";
 import type { CatalogBrowseProduct, CatalogListing, MarketplaceOffer, MarketplaceProvider, MarketplaceSourceStatus } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -288,6 +291,29 @@ function seedListingOffer(listing: CatalogListing, target: ExactTarget, index: n
   };
 }
 
+/** Channel3 titles are normalized by Channel3 and rarely equal a marketplace's title,
+ * so an offer matches when it contains every model word of the selected product and the
+ * same model numbers. Extra words (gender, "Shoes") are allowed; audience filtering
+ * runs afterwards and removes kids/other-audience listings. */
+function channel3Match(offer: MarketplaceOffer, target: ExactTarget): boolean {
+  const isYear = (token: string) => /^(?:19|20)\d{2}$/.test(token);
+  const isNumber = (token: string) => /^\d+(?:\.\d+)?$/.test(token) && !isYear(token);
+  const targetTokens = productTokens(target.title, target.brand).filter((token) => !isYear(token));
+  if (!targetTokens.length) return false;
+  const offerTokens = productTokens(offer.title, target.brand).filter((token) => !isYear(token));
+  const offerSet = new Set(offerTokens);
+  const targetNumbers = targetTokens.filter(isNumber).sort();
+  const offerNumbers = offerTokens.filter(isNumber).sort();
+  if (targetNumbers.length && (targetNumbers.length !== offerNumbers.length || targetNumbers.some((number, index) => number !== offerNumbers[index]))) return false;
+  return targetTokens.every((token) => tokenEquivalent(token, offerSet));
+}
+function sourceKeyConfigured(key: string): boolean {
+  if (key === "shopping") return Boolean(process.env.SERPAPI_API_KEY);
+  if (key === "channel3") return channel3Configured();
+  if (key === "nike") return Boolean(process.env.API_SH_KEY);
+  return Boolean(process.env.PCKT_API_KEY);
+}
+
 async function readCache(key: string) {
   const sql = getDb(); if (!sql) return null;
   const rows = await sql`SELECT results_json, sources_json, cached_at FROM retailer_search_cache WHERE cache_key = ${key} AND expires_at > now() LIMIT 1` as Array<Record<string, unknown>>;
@@ -297,13 +323,13 @@ async function readCache(key: string) {
   if (!Array.isArray(offers)) return null;
   return { offers: offers as MarketplaceOffer[], sources: Array.isArray(statuses) ? statuses as SourceStatus[] : [], cachedAt: row.cached_at };
 }
-async function writeCache(key: string, query: string, offers: MarketplaceOffer[], statuses: SourceStatus[]) {
+async function writeCache(key: string, query: string, offers: MarketplaceOffer[], statuses: SourceStatus[], ttlHours = CACHE_HOURS) {
   const sql = getDb(); if (!sql) return;
   await sql`
     INSERT INTO retailer_search_cache (cache_key, query_text, results_json, sources_json, cached_at, expires_at)
-    VALUES (${key}, ${query}, ${JSON.stringify(offers)}::jsonb, ${JSON.stringify(statuses)}::jsonb, now(), now() + (${CACHE_HOURS} * interval '1 hour'))
+    VALUES (${key}, ${query}, ${JSON.stringify(offers)}::jsonb, ${JSON.stringify(statuses)}::jsonb, now(), now() + (${ttlHours} * interval '1 hour'))
     ON CONFLICT (cache_key) DO UPDATE SET query_text = EXCLUDED.query_text, results_json = EXCLUDED.results_json,
-      sources_json = EXCLUDED.sources_json, cached_at = now(), expires_at = now() + (${CACHE_HOURS} * interval '1 hour')
+      sources_json = EXCLUDED.sources_json, cached_at = now(), expires_at = now() + (${ttlHours} * interval '1 hour')
   `;
 }
 function buildExactQuery(target: ExactTarget): string {
@@ -340,15 +366,15 @@ export async function POST(request: NextRequest) {
       gender: str(item.gender) as CatalogListing["gender"],
       releaseYear: Number.isInteger(Number(item.releaseYear)) ? Number(item.releaseYear) : undefined,
       onSale: typeof item.onSale === "boolean" ? item.onSale : undefined,
-    })).filter((item) => ["stockx", "goat", "flightclub", "kickscrew", "shopping"].includes(item.source)) : [],
+    })).filter((item) => ["stockx", "goat", "flightclub", "kickscrew", "shopping", "nike"].includes(item.source)) : [],
   };
   const query = buildExactQuery(target);
   const listingSignature = target.listings.map((listing) => `${listing.source}:${listing.url.toLowerCase()}`).sort().join("|");
-  const cacheIdentity = ["exact-offers:v9", target.brand, target.title, target.styleCode || "", target.color || "", target.releaseYear || "", target.gender || "", target.requestedAudience, listingSignature].map(String).join(":");
+  const cacheIdentity = ["exact-offers:v10", target.brand, target.title, target.styleCode || "", target.color || "", target.releaseYear || "", target.gender || "", target.requestedAudience, listingSignature].map(String).join(":");
   const cacheKey = createHash("sha256").update(norm(cacheIdentity)).digest("hex");
   try {
     const cached = await readCache(cacheKey);
-    const newlyConfigured = cached?.sources.some((source) => source.status === "not_configured" && ((source.key === "shopping" && Boolean(process.env.SERPAPI_API_KEY)) || (source.key !== "shopping" && Boolean(process.env.PCKT_API_KEY))));
+    const newlyConfigured = cached?.sources.some((source) => source.status === "not_configured" && sourceKeyConfigured(source.key));
     if (cached && !newlyConfigured) {
       const cachedProduct: CatalogBrowseProduct = {
         id: target.id || cacheKey.slice(0, 20), title: target.title, brand: target.brand,
@@ -376,6 +402,7 @@ export async function POST(request: NextRequest) {
   const sourceNames: Record<OfferSource, string> = {
     stockx: "StockX", goat: "GOAT", flightclub: "Flight Club",
     kickscrew: "Kicks Crew", shopping: "Google Shopping merchants",
+    nike: "Nike.com", channel3: "Channel3 merchants",
   };
   const statuses: SourceStatus[] = (Object.keys(sourceNames) as OfferSource[]).map((source) => {
     const count = offers.filter((offer) => offer.source === source).length;
@@ -389,6 +416,43 @@ export async function POST(request: NextRequest) {
         : "No listing from this retailer was present in the selected product's catalog group. Compare offers will not insert a similar product from a new broad search.",
     };
   });
+
+  // Live cross-merchant lookup. Channel3 matches this product to offers at many stores
+  // (Foot Locker, JD Sports, Champs, adidas.com, newbalance.com, puma.com, ...). One credit,
+  // cached for CHANNEL3_CACHE_HOURS, and never saved to the normalized catalog (see lib/channel3.ts).
+  const channel3Status: SourceStatus = { key: "channel3", name: sourceNames.channel3, status: "not_configured", results: 0, message: "Add CHANNEL3_API_KEY in Vercel to also compare offers from many other stores." };
+  if (channel3Configured()) {
+    const cooldown = await getProviderCooldown("channel3");
+    if (cooldown.paused) {
+      Object.assign(channel3Status, { status: "cooldown", message: `Temporarily paused after repeated provider errors${cooldown.disabledUntil ? ` until ${cooldown.disabledUntil}` : ""}.` });
+    } else if (!(await reserveProviderBudget("channel3", 1))) {
+      Object.assign(channel3Status, { status: "budget_reached", message: "Daily or monthly Channel3 safety budget reached. Other retailers are still shown." });
+    } else {
+      const startedAt = Date.now();
+      try {
+        const channel3Query = [target.title, target.styleCode, norm(target.title).includes(norm(target.brand)) ? "" : target.brand].filter(Boolean).join(" ").slice(0, 150);
+        const candidates = channel3Candidates(await searchChannel3(channel3Query, 20));
+        const known = new Set(offers.map((offer) => norm(offer.retailer)));
+        const cheapestPerRetailer = new Map<string, MarketplaceOffer>();
+        for (const { offer } of candidates) {
+          if (!channel3Match(offer, target)) continue;
+          const retailerKey = norm(offer.retailer);
+          if (known.has(retailerKey)) continue; // already listed from the catalog group
+          const current = cheapestPerRetailer.get(retailerKey);
+          if (!current || (offer.price ?? Infinity) < (current.price ?? Infinity)) cheapestPerRetailer.set(retailerKey, offer);
+        }
+        const found = [...cheapestPerRetailer.values()];
+        offers.push(...found);
+        await recordProviderSuccess("channel3", Date.now() - startedAt, found.length);
+        Object.assign(channel3Status, { status: "success", results: found.length, message: found.length ? `${found.length} additional store offer(s) matched this exact product. Prices change quickly; confirm size and stock on the seller page.` : "No additional store offers matched this exact product." });
+      } catch (error) {
+        await recordProviderFailure("channel3", Date.now() - startedAt, error);
+        Object.assign(channel3Status, { status: "error", message: error instanceof Error ? error.message : "Channel3 request failed." });
+      }
+    }
+  }
+  const statusIndex = statuses.findIndex((status) => status.key === "channel3");
+  if (statusIndex >= 0) statuses[statusIndex] = channel3Status; else statuses.push(channel3Status);
 
   // Apply the audience selected by the shopper to each retailer listing, not
   // merely to the grouped catalog card. GS/PS/youth variants are excluded from
@@ -421,6 +485,12 @@ export async function POST(request: NextRequest) {
     releaseYear: target.releaseYear,
   };
   try { await persistCatalogSnapshot([canonicalProduct], results); } catch { /* normalized inventory is an additive index; offers remain visible */ }
-  try { await writeCache(cacheKey, query, results, statuses); } catch { /* keep live offers visible if caching fails */ }
+  // Channel3 data is cached for hours, not days. A Channel3 failure or exhausted budget
+  // is not cached so the next Compare can retry once it recovers.
+  const channel3Incomplete = ["budget_reached", "cooldown", "error"].includes(channel3Status.status);
+  const ttlHours = channel3Status.status === "success" ? CHANNEL3_CACHE_HOURS : CACHE_HOURS;
+  if (!channel3Incomplete) {
+    try { await writeCache(cacheKey, query, results, statuses, ttlHours); } catch { /* keep live offers visible if caching fails */ }
+  }
   return NextResponse.json({ productId: target.id, offers: results, sources: statuses, cached: false, persistenceAvailable, cacheHours: CACHE_HOURS, note: "Only direct retailer listings already grouped with this exact catalog product are shown. Compare offers does not run new broad product searches or spend catalog-search credits. The seller page remains the final source for variant and checkout confirmation." });
 }
