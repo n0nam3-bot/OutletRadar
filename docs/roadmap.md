@@ -10,6 +10,6 @@ Planned direction after v2.3. Order reflects dependencies: data supply and relia
 | v3.0 | **Size-level accuracy** for StockX, GOAT and Flight Club, on demand and limited to watched or clicked products | Size lookups spend the same scarce credits, so they come after the supply and refresh work. |
 | v3.1 | **Scale:** paid provider plans, hosting and database sized for commercial traffic | Triggered by real traffic or revenue, not by a date. |
 
-Shipped so far: v2.3 never-empty search and warm-up, v2.4 Nike.com and Channel3 cross-store comparison, v2.5 eBay listings in Compare, v2.6 Impact partner catalogs in Compare.
+Shipped so far: v2.3 never-empty search and warm-up, v2.4 Nike.com and Channel3 cross-store comparison, v2.5 eBay listings in Compare, v2.6 Impact partner catalogs in Compare, v2.7 admin live connection test.
 
 An earnings dashboard is intentionally not planned: the affiliate networks already provide one.

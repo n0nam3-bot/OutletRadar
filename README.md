@@ -16,7 +16,7 @@ Built with Next.js 15, Vercel and Neon Postgres, and designed to keep working on
 - **Exact-product comparison.** **Compare offers** expands a card to show that model's direct retailer listings: seller title, price, size signals and product link. With a Channel3 key it also adds offers from many other stores and brand sites (adidas, New Balance, Puma, Reebok, Vans, Foot Locker and more), with eBay keys it adds new fixed-price eBay listings, and with Impact keys it adds affiliate-linked offers from the brands and stores that approved your account. Similar-but-different models are excluded.
 - **Never an empty page.** If a source is out of free lookups, paused or failing, saved results are shown with a clear notice and the search is queued for an automatic refresh.
 - **Watchlist.** Save products. The daily price-history job currently tracks Nike URLs only; other saved links are kept but not refreshed.
-- **Owner dashboard.** `/admin/providers` shows provider budgets, health, the refresh queue, catalog counts and which retailers have actually appeared in results.
+- **Owner dashboard.** `/admin/providers` shows provider budgets, health, the refresh queue, catalog counts, which retailers have actually appeared in results, and a one-click live connection test of every configured provider.
 
 ## How it works
 
@@ -125,6 +125,7 @@ Without `DATABASE_URL` the catalog returns an error: Neon is required.
 | Task | Where |
 |---|---|
 | Check provider usage, health, refresh queue | `/admin/providers` (enter `CRON_SECRET`) |
+| Confirm every provider connection works and which stores it returns | `/admin/providers` → **Run connection test** (about one credit per provider) |
 | Liveness check | `/api/health` (runs a DB query; do not poll it, it keeps Neon awake). `/api/health?light=1` checks configuration only. |
 | Change which searches are kept warm | `lib/warm-seeds.ts` |
 | Add search shorthand | `lib/query-normalize.ts` |
@@ -150,7 +151,7 @@ Releases are applied by uploading a ZIP to the repository root; a GitHub Action 
 | `GET /api/watchlist`, `POST`, `DELETE` | Saved products |
 | `GET /api/search`, `/api/suggest`, `/api/product` | Legacy Nike search, typeahead and detail |
 | `GET /api/cron/price-check`, `/api/cron/warm-catalog` | Scheduled jobs (secret required) |
-| `GET /api/admin/providers` | Diagnostics (secret required) |
+| `GET /api/admin/providers`, `POST /api/admin/providers/test` | Diagnostics and live connection test (secret required) |
 | `GET /api/health` | Sanitized health check |
 | `GET /api/marketplaces` | Retired; returns HTTP 410 |
 
@@ -167,7 +168,7 @@ app/
   api/
     catalog/                    route.ts (thin), offers/, availability/
     cron/                       price-check/, warm-catalog/
-    admin/providers/            Diagnostics API
+    admin/providers/            Diagnostics API; test/ (live connection test)
     health/  marketplaces/      Health check; retired endpoint
     search/  suggest/  product/ Legacy Nike endpoints
     watchlist/                  Saved products
@@ -177,6 +178,7 @@ lib/
   catalog-queue.ts              Refresh queue
   provider-budget.ts            Atomic daily/monthly budgets
   channel3.ts  ebay.ts  impact.ts  Live-offer clients (Channel3, eBay, Impact)
+  provider-selftest.ts          Live connection test used by the admin page
   provider-health.ts            Telemetry and circuit breaker
   query-normalize.ts            Search shorthand expansion
   warm-seeds.ts                 Popular searches kept warm
@@ -195,7 +197,7 @@ vercel.json                     Cron schedule
 - [Free-tier operations](./docs/free-tier-operations.md): limits, fallbacks, tuning, warm-up, dashboard
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v2.6.0](./changelog/v2.6.0.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v2.7.0](./changelog/v2.7.0.md))
 
 ## Data and license
 

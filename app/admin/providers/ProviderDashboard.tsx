@@ -48,6 +48,29 @@ export default function ProviderAdminPage() {
   const [data, setData] = useState<Diagnostics | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  type ProbeRow = { provider: string; label: string; status: string; durationMs: number; count: number; retailers: string[]; sample: string[]; credits: string; message: string };
+  const [probes, setProbes] = useState<ProbeRow[] | null>(null);
+  const [probeTargets, setProbeTargets] = useState<Array<{ name: string; providers: string[] }>>([]);
+  const [probing, setProbing] = useState(false);
+  const [probeError, setProbeError] = useState("");
+
+  async function runConnectionTest() {
+    setProbing(true);
+    setProbeError("");
+    try {
+      const response = await fetch("/api/admin/providers/test", { method: "POST", cache: "no-store", headers: { Authorization: `Bearer ${secret.trim()}` } });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.error || `Connection test failed (${response.status}).`);
+      setProbes(payload.results as ProbeRow[]);
+      setProbeTargets((payload.targets ?? []) as Array<{ name: string; providers: string[] }>);
+      await loadDiagnostics();
+    } catch (cause) {
+      setProbes(null);
+      setProbeError(cause instanceof Error ? cause.message : "Could not run the connection test.");
+    } finally {
+      setProbing(false);
+    }
+  }
 
   async function loadDiagnostics(event?: FormEvent) {
     event?.preventDefault();
@@ -143,6 +166,28 @@ export default function ProviderAdminPage() {
             })}
           </div>
 
+          <div className="admin-section-heading"><h2>Live connection test</h2><span>Sends one real search per configured provider (about one credit each)</span></div>
+          <div className="admin-probe-actions">
+            <button type="button" className="admin-probe-button" onClick={runConnectionTest} disabled={probing}>{probing ? "Testing providers…" : "Run connection test"}</button>
+            {probeError && <span className="admin-probe-error">{probeError}</span>}
+          </div>
+          {probes && <div className="admin-coverage-list">
+            {probes.map((probe) => <div className={`admin-coverage-row ${probe.status === "ok" ? "is-seen" : "is-missing"}`} key={probe.provider}>
+              <strong>{probe.status === "ok" ? "✓" : probe.status === "not_configured" ? "–" : "!"} {probe.label}</strong>
+              <span>{probe.status === "ok" || probe.status === "empty"
+                ? `${probe.message} ${probe.count} result(s) in ${probe.durationMs} ms · ${probe.credits}${probe.retailers.length ? ` · stores: ${probe.retailers.join(", ")}` : ""}${probe.sample.length ? ` · e.g. ${probe.sample[0]}` : ""}`
+                : probe.message}</span>
+            </div>)}
+          </div>}
+          {probes && probeTargets.length > 0 && <>
+            <p className="admin-coverage-other">Stores on your list found by this test search (&ldquo;Air Jordan 4&rdquo;; results vary by product):</p>
+            <div className="admin-coverage-list">
+              {probeTargets.map((target) => <div className={`admin-coverage-row ${target.providers.length ? "is-seen" : "is-missing"}`} key={target.name}>
+                <strong>{target.providers.length ? "✓" : "–"} {target.name}</strong>
+                <span>{target.providers.length ? `via ${target.providers.join(", ")}` : "not returned by any provider for this search"}</span>
+              </div>)}
+            </div>
+          </>}
           {data.retailerCoverage && <>
             <div className="admin-section-heading"><h2>Retailer coverage</h2><span>Sellers actually stored from real searches</span></div>
             <div className="admin-coverage-list">

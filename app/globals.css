@@ -349,3 +349,9 @@
 .admin-coverage-row.is-missing{background:#fbfbf8}
 .admin-coverage-row.is-missing strong{color:#8a9186}
 .admin-coverage-other{font:10px/1.6 var(--mono);color:#7b8678;margin:0 0 18px}
+
+/* v2.7: admin live connection test */
+.admin-probe-actions{display:flex;gap:12px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.admin-probe-button{font:600 11px var(--display);background:#17331f;color:#fff;border:0;padding:10px 14px;cursor:pointer}
+.admin-probe-button:disabled{opacity:.6;cursor:wait}
+.admin-probe-error{font:10px var(--mono);color:#a33}

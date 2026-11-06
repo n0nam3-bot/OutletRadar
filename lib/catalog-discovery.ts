@@ -1254,3 +1254,6 @@ export async function discoverCatalog(params: URLSearchParams, options: { mode?:
     note: "Catalog records include historical/discontinued product models where indexed by providers. A catalog record does not establish a current retailer offer or size availability.",
   });
 }
+
+// Shared with the admin connection test (lib/provider-selftest.ts).
+export { pcktSources, fetchJson, records };
