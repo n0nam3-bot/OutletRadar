@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { filterOfferSizeLabels, inferListingAudience, isOfferAllowedForAudience } from "@/lib/audience";
 import { persistCatalogSnapshot } from "@/lib/catalog-store";
 import { CHANNEL3_CACHE_HOURS, channel3Candidates, channel3Configured, searchChannel3 } from "@/lib/channel3";
+import { applyAffiliateLinks } from "@/lib/affiliate-links";
 import { IMPACT_CACHE_HOURS, impactConfigured, impactOffers, searchImpact } from "@/lib/impact";
 import { EBAY_CACHE_HOURS, ebayConfigured, ebayOffers, searchEbay } from "@/lib/ebay";
 import { getProviderCooldown, recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
@@ -389,7 +390,7 @@ export async function POST(request: NextRequest) {
         releaseYear: target.releaseYear,
       };
       try { await persistCatalogSnapshot([cachedProduct], cached.offers); } catch { /* backfill is best-effort */ }
-      return NextResponse.json({ productId: target.id, offers: cached.offers, sources: cached.sources, cached: true, cachedAt: cached.cachedAt, cacheHours: CACHE_HOURS, note: "Comparison reuses the selected product’s grouped retailer listings; opening this panel does not trigger broad catalog searches." });
+      return NextResponse.json({ productId: target.id, offers: applyAffiliateLinks(cached.offers), sources: cached.sources, cached: true, cachedAt: cached.cachedAt, cacheHours: CACHE_HOURS, note: "Comparison reuses the selected product’s grouped retailer listings; opening this panel does not trigger broad catalog searches." });
     }
   } catch {
     return NextResponse.json({ error: "Could not read the exact-product comparison cache. Confirm retailer_search_cache exists in the Neon branch used by DATABASE_URL." }, { status: 503 });
@@ -571,5 +572,5 @@ export async function POST(request: NextRequest) {
   if (!liveIncomplete) {
     try { await writeCache(cacheKey, query, results, statuses, ttlHours); } catch { /* keep live offers visible if caching fails */ }
   }
-  return NextResponse.json({ productId: target.id, offers: results, sources: statuses, cached: false, persistenceAvailable, cacheHours: CACHE_HOURS, note: "Only direct retailer listings already grouped with this exact catalog product are shown. Compare offers does not run new broad product searches or spend catalog-search credits. The seller page remains the final source for variant and checkout confirmation." });
+  return NextResponse.json({ productId: target.id, offers: applyAffiliateLinks(results), sources: statuses, cached: false, persistenceAvailable, cacheHours: CACHE_HOURS, note: "Only direct retailer listings already grouped with this exact catalog product are shown. Compare offers does not run new broad product searches or spend catalog-search credits. The seller page remains the final source for variant and checkout confirmation." });
 }

@@ -81,7 +81,8 @@ export function ebayOffers(items: Record<string, unknown>[]): MarketplaceOffer[]
   const out: MarketplaceOffer[] = [];
   for (const item of items) {
     const title = text(item.title);
-    const url = text(item.itemAffiliateWebUrl) || text(item.itemWebUrl);
+    const affiliateUrl = text(item.itemAffiliateWebUrl);
+    const url = affiliateUrl || text(item.itemWebUrl);
     if (!title || !/^https?:\/\//i.test(url)) continue;
     const priceObject = obj(item.price);
     const price = Number(priceObject?.value);
@@ -92,7 +93,7 @@ export function ebayOffers(items: Record<string, unknown>[]): MarketplaceOffer[]
       id: `ebay:${text(item.itemId) || url}`,
       providerProductId: text(item.itemId) || undefined,
       source: "ebay", retailer: "eBay", condition: text(item.condition) || "New", channel: "online",
-      title, url, imageUrl: text(obj(item.image)?.imageUrl) || undefined,
+      title, url, affiliate: Boolean(affiliateUrl), imageUrl: text(obj(item.image)?.imageUrl) || undefined,
       price: Number.isFinite(price) && price > 0 ? price : undefined,
       currency: (text(priceObject?.currency) || "USD").toUpperCase(),
       priceLabel: "Buy It Now price",

@@ -6,7 +6,7 @@ Built with Next.js 15, Vercel and Neon Postgres, and designed to keep working on
 
 > **Limitations:** the catalog is a discovery index, not a complete product master. A catalog record is not proof of a current listing or of size-level availability, and the app does not claim physical-store inventory. Always confirm price, size and availability on the seller's page.
 
-**Contents:** [What it does](#what-it-does) · [How it works](#how-it-works) · [Setup](#setup) · [Environment variables](#environment-variables) · [Operating it](#operating-it) · [Updating](#updating) · [API routes](#api-routes) · [Project structure](#project-structure) · [Docs and changelog](#docs-and-changelog) · [Data and license](#data-and-license)
+**Contents:** [What it does](#what-it-does) · [How it works](#how-it-works) · [Setup](#setup) · [Environment variables](#environment-variables) · [Affiliate links](#affiliate-links) · [Operating it](#operating-it) · [Updating](#updating) · [API routes](#api-routes) · [Project structure](#project-structure) · [Docs and changelog](#docs-and-changelog) · [Data and license](#data-and-license)
 
 ## What it does
 
@@ -110,6 +110,7 @@ Without `DATABASE_URL` the catalog returns an error: Neon is required.
 | `EBAY_CAMPAIGN_ID` | Optional | eBay Partner Network campaign id for affiliate links |
 | `IMPACT_ACCOUNT_SID`, `IMPACT_AUTH_TOKEN` | Optional | Impact partner offers in Compare |
 | `IMPACT_DAILY_BUDGET`, `IMPACT_MONTHLY_BUDGET` | Optional | Default 500 and 15000 calls |
+| `AFFILIATE_LINK_TEMPLATES` | Optional | JSON map of store host to your affiliate tracking-link template; see [Affiliate links](#affiliate-links) |
 | `EBAY_DAILY_BUDGET`, `EBAY_MONTHLY_BUDGET` | Optional | Default 3000 and 90000 calls |
 | `CRON_SECRET` | Yes | Authorizes the cron jobs and the admin dashboard; use a random 32+ character value |
 | `PCKT_DAILY_BUDGET`, `PCKT_MONTHLY_BUDGET` | Optional | Default 15 and 450 credits |
@@ -119,6 +120,19 @@ Without `DATABASE_URL` the catalog returns an error: Neon is required.
 | `WARM_DAILY_SHARE` | Optional | Share of each daily budget the warm-up may use, default `0.4` |
 | `MAX_DAILY_PRICE_CHECKS` | Optional | Nike price checks per run, default and maximum 10 |
 | `RATE_LIMIT_SALT` | Legacy | Retained for compatibility; unused |
+
+## Affiliate links
+
+Links in **Compare offers** can earn commission in three ways:
+1. **Impact** and **eBay Partner Network** results already carry your tracking links (add the Impact keys, and `EBAY_CAMPAIGN_ID`).
+2. **Any other store you have joined** (StockX, GOAT, Foot Locker, adidas, and so on) through `AFFILIATE_LINK_TEMPLATES`: a JSON object mapping the store's host to the tracking-link template from your network's deep-link generator, with `{url}` where the product link goes:
+   ```json
+   {"goat.com":"https://goat.sjv.io/c/1111/2222/3333?u={url}","footlocker.com":"https://www.awin1.com/cread.php?awinmid=1234&awinaffid=5678&ued={url}"}
+   ```
+   Paste it as one line in Vercel. Use the exact format your network's deep-link generator produces; the examples above are illustrative.
+3. Everything else stays a plain link.
+
+Wrapped links show a short disclosure ("Affiliate link: Outlet Radar may earn a commission at no cost to you."). Check each network's program terms and the FTC disclosure rules for your country. The **Outbound clicks** report on `/admin/providers` shows which stores your visitors actually click, which tells you which programs to apply to.
 
 ## Operating it
 
@@ -180,6 +194,7 @@ lib/
   catalog-queue.ts              Refresh queue
   provider-budget.ts            Atomic daily/monthly budgets
   channel3.ts  ebay.ts  impact.ts  Live-offer clients (Channel3, eBay, Impact)
+  affiliate-links.ts            Affiliate tracking-link templates
   provider-selftest.ts          Live connection test used by the admin page
   provider-health.ts            Telemetry and circuit breaker
   query-normalize.ts            Search shorthand expansion
@@ -199,7 +214,7 @@ vercel.json                     Cron schedule
 - [Free-tier operations](./docs/free-tier-operations.md): limits, fallbacks, tuning, warm-up, dashboard
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v2.8.0](./changelog/v2.8.0.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v2.9.0](./changelog/v2.9.0.md))
 
 ## Data and license
 

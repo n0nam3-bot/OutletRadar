@@ -355,3 +355,6 @@
 .admin-probe-button{font:600 11px var(--display);background:#17331f;color:#fff;border:0;padding:10px 14px;cursor:pointer}
 .admin-probe-button:disabled{opacity:.6;cursor:wait}
 .admin-probe-error{font:10px var(--mono);color:#a33}
+
+/* v2.9: affiliate link disclosure next to the outbound link */
+.catalog-affiliate-note{display:block;margin-top:6px;font:9px/1.5 var(--mono);color:#7b8678}

@@ -19,6 +19,7 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 
 | Version | Migration to run | Required? |
 |---|---|---|
+| v2.9.0 | None | No database change. |
 | v2.8.0 | `005_offer_click_daily.sql` | Recommended. Without it clicks are not recorded and the dashboard says so. |
 | v2.7.0 | None | No database change. |
 | v2.6.0 | None | No database change. |
@@ -30,6 +31,11 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 | v1.7 | `001_multi_retailer.sql` | Required. Retailer search cache and monthly usage. |
 
 For a brand-new database, run the whole of `db/schema.sql` instead of the individual migrations. It is idempotent and always reflects the current schema.
+
+## Upgrading from v2.8.0 to v2.9.0
+
+1. No migration is needed. Upload the v2.9 ZIP and wait for the deployment.
+2. Optional: add `AFFILIATE_LINK_TEMPLATES` in Vercel (see the README section on affiliate links), then redeploy. Press **Compare offers** and check that links for those stores open through your tracking link and show the disclosure.
 
 ## Upgrading from v2.7.0 to v2.8.0
 

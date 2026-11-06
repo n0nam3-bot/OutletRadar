@@ -95,7 +95,7 @@ export async function impactOffers(items: Record<string, unknown>[]): Promise<Ma
       id: `impact:${text(item.CatalogItemId, item.Id) || url}`,
       providerProductId: text(item.CatalogItemId, item.Id) || undefined,
       source: "impact", retailer, condition: "New", channel: "online",
-      title, url, imageUrl: text(item.ImageUrl) || undefined, brand: text(item.Manufacturer) || undefined,
+      title, url, affiliate: true, imageUrl: text(item.ImageUrl) || undefined, brand: text(item.Manufacturer) || undefined,
       price: Number.isFinite(price) && price > 0 ? price : undefined,
       currency: (text(item.Currency) || "USD").toUpperCase(),
       priceLabel: "Store price",

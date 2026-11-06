@@ -44,6 +44,8 @@ export type MarketplaceOffer = {
   channel: "online" | "store";
   title: string;
   url: string;
+  /** True when `url` is an affiliate tracking link (shown to shoppers as "Affiliate link"). */
+  affiliate?: boolean;
   imageUrl?: string;
   styleCode?: string;
   brand?: string;

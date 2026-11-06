@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     service: "outlet-radar",
-    version: "2.8.0",
+    version: "2.9.0",
     status: database === "unavailable" ? "degraded" : "ok",
     database,
     databaseConfigured,
