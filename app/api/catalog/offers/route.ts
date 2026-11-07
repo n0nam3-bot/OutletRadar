@@ -371,7 +371,7 @@ export async function POST(request: NextRequest) {
       gender: str(item.gender) as CatalogListing["gender"],
       releaseYear: Number.isInteger(Number(item.releaseYear)) ? Number(item.releaseYear) : undefined,
       onSale: typeof item.onSale === "boolean" ? item.onSale : undefined,
-    })).filter((item) => ["stockx", "goat", "flightclub", "kickscrew", "shopping", "nike"].includes(item.source)) : [],
+    })).filter((item) => ["stockx", "goat", "flightclub", "kickscrew", "shopping", "nike", "impact"].includes(item.source)) : [],
   };
   const query = buildExactQuery(target);
   const listingSignature = target.listings.map((listing) => `${listing.source}:${listing.url.toLowerCase()}`).sort().join("|");
@@ -519,7 +519,8 @@ export async function POST(request: NextRequest) {
         // Prefer the affiliate link: drop a plain Channel3 offer from the same store.
         const impactRetailers = new Set(found.map((offer) => norm(offer.retailer)));
         for (let index = offers.length - 1; index >= 0; index--) {
-          if (offers[index].source === "channel3" && impactRetailers.has(norm(offers[index].retailer))) offers.splice(index, 1);
+          // Fresh live Impact results replace the same store's Channel3 link and any older feed-ingested row.
+          if ((offers[index].source === "channel3" || offers[index].source === "impact") && impactRetailers.has(norm(offers[index].retailer))) offers.splice(index, 1);
         }
         offers.push(...found);
         await recordProviderSuccess("impact", Date.now() - startedAt, found.length);

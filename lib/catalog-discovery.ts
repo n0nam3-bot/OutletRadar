@@ -697,7 +697,7 @@ async function searchStoredCatalog(input: {
       const item = obj(value);
       if (!item) continue;
       const sourceValue = str(item.source);
-      if (!["stockx", "goat", "flightclub", "kickscrew", "shopping"].includes(sourceValue)) continue;
+      if (!["stockx", "goat", "flightclub", "kickscrew", "shopping", "nike", "impact"].includes(sourceValue)) continue;
       const url = str(item.url);
       if (!url) continue;
       const sizesRaw = Array.isArray(item.sizes) ? item.sizes : [];
@@ -1256,4 +1256,5 @@ export async function discoverCatalog(params: URLSearchParams, options: { mode?:
 }
 
 // Shared with the admin connection test (lib/provider-selftest.ts).
-export { pcktSources, fetchJson, records };
+export { pcktSources, fetchJson, records, groupListings };
+export type { InternalListing };

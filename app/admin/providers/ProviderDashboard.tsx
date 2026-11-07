@@ -28,6 +28,7 @@ type Diagnostics = {
   checkedAt: string;
   budgets: Budget[];
   providers: Provider[];
+  feedIngest?: { enabled: boolean; configuredCatalogs: number; tableAvailable: boolean; impactOffers: number; rows: Array<{ catalogId: string; name: string; nextPage: number; numPages: number | null; itemsSeen: number; productsSaved: number; cycles: number; lastRunAt: string | null; lastError: string | null }> };
   clicks?: { available: boolean; byStore: Array<{ retailer: string; source: string; clicks: number }>; byProduct: Array<{ title: string; clicks: number }>; total: number };
   retailerCoverage?: { targets: Array<{ name: string; via: string; seen: boolean; offers: number; products: number; lastSeenAt: string | null; sellerNames: string[] }>; other: Array<{ retailer: string; source: string; offers: number }> };
   refreshQueue?: { available: boolean; pending: number; oldestPendingAt: string | null; completedLast7Days: number };
@@ -54,6 +55,27 @@ export default function ProviderAdminPage() {
   const [probeTargets, setProbeTargets] = useState<Array<{ name: string; providers: string[] }>>([]);
   const [probing, setProbing] = useState(false);
   const [probeError, setProbeError] = useState("");
+
+  type FeedPreviewData = { catalogs: Array<{ id: string; name: string; selected: boolean }>; sample?: { catalogId: string; name: string; items: number; numPages: number | null; fields: string[]; matched: number; products: number; examples: Array<{ title: string; brand: string; price?: number; sizes: string[]; category: string }> }; error?: string };
+  const [feedPreview, setFeedPreview] = useState<FeedPreviewData | null>(null);
+  const [feedPreviewing, setFeedPreviewing] = useState(false);
+  const [feedPreviewError, setFeedPreviewError] = useState("");
+
+  async function runFeedPreview(catalogId?: string) {
+    setFeedPreviewing(true);
+    setFeedPreviewError("");
+    try {
+      const response = await fetch(`/api/admin/providers/feed-preview${catalogId ? `?catalog=${encodeURIComponent(catalogId)}` : ""}`, { method: "POST", cache: "no-store", headers: { Authorization: `Bearer ${secret.trim()}` } });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.error || `Feed preview failed (${response.status}).`);
+      setFeedPreview(payload as FeedPreviewData);
+    } catch (cause) {
+      setFeedPreview(null);
+      setFeedPreviewError(cause instanceof Error ? cause.message : "Could not preview the feeds.");
+    } finally {
+      setFeedPreviewing(false);
+    }
+  }
 
   async function runConnectionTest() {
     setProbing(true);
@@ -188,6 +210,20 @@ export default function ProviderAdminPage() {
                 <span>{target.providers.length ? `via ${target.providers.join(", ")}` : "not returned by any provider for this search"}</span>
               </div>)}
             </div>
+          </>}
+          {data.feedIngest && <>
+            <div className="admin-section-heading"><h2>Bulk feed ingestion</h2><span>{data.feedIngest.enabled ? "On" : "Off"} · {data.feedIngest.configuredCatalogs} catalog(s) selected · {data.feedIngest.impactOffers.toLocaleString()} stored Impact offers</span></div>
+            <div className="admin-probe-actions">
+              <button type="button" className="admin-probe-button" onClick={() => runFeedPreview()} disabled={feedPreviewing}>{feedPreviewing ? "Reading feeds…" : "Preview Impact feeds"}</button>
+              {feedPreviewError && <span className="admin-probe-error">{feedPreviewError}</span>}
+            </div>
+            {feedPreview && <div className="admin-coverage-list">
+              {feedPreview.error && <div className="admin-coverage-row is-missing"><strong>!</strong><span>{feedPreview.error}</span></div>}
+              {feedPreview.catalogs.map((catalog) => <div className={`admin-coverage-row ${catalog.selected ? "is-seen" : "is-missing"}`} key={catalog.id}><strong>{catalog.selected ? "✓" : "–"} {catalog.name}</strong><span>catalog id {catalog.id}{catalog.selected ? " · selected for ingestion" : ""} · <button type="button" className="admin-link-button" onClick={() => runFeedPreview(catalog.id)}>preview this catalog</button></span></div>)}
+              {feedPreview.sample && <div className="admin-coverage-row is-seen"><strong>Sample: {feedPreview.sample.name}</strong><span>{feedPreview.sample.items} items on page 1 of {feedPreview.sample.numPages ?? "?"} · {feedPreview.sample.matched} pass the item filter → {feedPreview.sample.products} products · fields: {feedPreview.sample.fields.slice(0, 14).join(", ")}{feedPreview.sample.examples.length ? ` · e.g. ${feedPreview.sample.examples.map((example) => `${example.brand} ${example.title}${example.price ? ` $${example.price}` : ""}${example.sizes.length ? ` (sizes ${example.sizes.slice(0, 6).join("/")})` : ""}`).join("; ")}` : ""}</span></div>}
+            </div>}
+            {data.feedIngest.rows.length > 0 && <div className="admin-coverage-list">{data.feedIngest.rows.map((row) => <div className={`admin-coverage-row ${row.lastError ? "is-missing" : "is-seen"}`} key={row.catalogId}><strong>{row.name || row.catalogId}</strong><span>next page {row.nextPage}{row.numPages ? ` of ${row.numPages}` : ""} · {row.itemsSeen.toLocaleString()} items read · {row.productsSaved.toLocaleString()} products saved · {row.cycles} full cycle(s){row.lastRunAt ? ` · last run ${dateLabel(row.lastRunAt)}` : ""}{row.lastError ? ` · error: ${row.lastError}` : ""}</span></div>)}</div>}
+            {!data.feedIngest.tableAvailable && <p className="admin-coverage-other">Apply migration 006 to enable feed ingestion.</p>}
           </>}
           {data.clicks && <>
             <div className="admin-section-heading"><h2>Outbound clicks</h2><span>Last 7 days · anonymous counts</span></div>

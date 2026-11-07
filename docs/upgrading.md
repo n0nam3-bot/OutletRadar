@@ -19,6 +19,8 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 
 | Version | Migration to run | Required? |
 |---|---|---|
+| v3.2.0 | `006_feed_ingest_state.sql` | Only needed for bulk feed ingestion (off by default). |
+| v3.1.0, v3.0.0 | None | No database change. |
 | v2.9.0 | None | No database change. |
 | v2.8.0 | `005_offer_click_daily.sql` | Recommended. Without it clicks are not recorded and the dashboard says so. |
 | v2.7.0 | None | No database change. |
@@ -31,6 +33,14 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 | v1.7 | `001_multi_retailer.sql` | Required. Retailer search cache and monthly usage. |
 
 For a brand-new database, run the whole of `db/schema.sql` instead of the individual migrations. It is idempotent and always reflects the current schema.
+
+## Upgrading from v2.9.0 to v3.0 / v3.1 / v3.2
+
+1. Optional: run `db/migrations/006_feed_ingest_state.sql` in Neon (only for bulk feed ingestion). Make sure 004 and 005 are applied if you skipped them.
+2. Upload the v3.2 ZIP and wait for the deployment. Sizes (v3.0) and saved searches (v3.1) work immediately with no setup.
+3. Test sizes: search a sneaker model, open **Filters**, enter a size, choose a **Size type**, press **Apply refinements**, and look for "Size 10 (men's): from $…" on the cards.
+4. Test saved searches: press **Save this search**, open **Watchlist**, press **Run & check prices**.
+5. Optional bulk feed: follow the "Bulk feed ingestion" section of the README. Start with **Preview Impact feeds** before enabling.
 
 ## Upgrading from v2.8.0 to v2.9.0
 

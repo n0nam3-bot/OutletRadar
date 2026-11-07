@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { PROVIDER_BUDGETS } from "@/lib/provider-budget";
 import { getCatalogQueueStats } from "@/lib/catalog-queue";
+import { feedCatalogIds, feedEnabled } from "@/lib/feed-ingest";
 import { summarizeCoverage, type RetailerCoverageRow } from "@/lib/retailer-targets";
 
 export const runtime = "nodejs";
@@ -85,12 +86,22 @@ export async function GET(request: NextRequest) {
       ` as Array<{ title: string; clicks: number }>;
       clicks = { available: true, byStore: byStore.map((row) => ({ ...row, clicks: Number(row.clicks) })), byProduct: byProduct.map((row) => ({ ...row, clicks: Number(row.clicks) })), total: byStore.reduce((sum, row) => sum + Number(row.clicks), 0) };
     } catch { /* table not created yet */ }
+    let feedIngest: { enabled: boolean; configuredCatalogs: number; tableAvailable: boolean; rows: Array<{ catalogId: string; name: string; nextPage: number; numPages: number | null; itemsSeen: number; productsSaved: number; cycles: number; lastRunAt: string | null; lastError: string | null }>; impactOffers: number } = { enabled: feedEnabled(), configuredCatalogs: feedCatalogIds().length, tableAvailable: false, rows: [], impactOffers: 0 };
+    try {
+      const rows = await sql`SELECT catalog_id, advertiser_name, next_page, num_pages, items_seen, products_saved, cycles, last_run_at, last_error FROM feed_ingest_state ORDER BY catalog_id` as Array<Record<string, unknown>>;
+      const offerCount = await sql`SELECT COUNT(*)::int AS n FROM retailer_offers WHERE source = 'impact' AND (expires_at IS NULL OR expires_at > NOW())` as Array<{ n: number }>;
+      feedIngest = { ...feedIngest, tableAvailable: true, impactOffers: Number(offerCount[0]?.n ?? 0), rows: rows.map((row) => ({
+        catalogId: String(row.catalog_id), name: String(row.advertiser_name ?? ""), nextPage: Number(row.next_page), numPages: row.num_pages === null ? null : Number(row.num_pages),
+        itemsSeen: Number(row.items_seen), productsSaved: Number(row.products_saved), cycles: Number(row.cycles),
+        lastRunAt: row.last_run_at ? new Date(String(row.last_run_at)).toISOString() : null, lastError: row.last_error ? String(row.last_error) : null,
+      })) };
+    } catch { /* migration 006 not applied */ }
     const usage = new Map(usageRows.map((row) => [row.provider, Number(row.units_reserved)]));
     const dailyUsage = new Map(dailyRows.map((row) => [row.provider, Number(row.units_reserved)]));
     const counts = catalogRows[0] || { canonical_products: 0, retailer_offers: 0, size_variants: 0 };
     return NextResponse.json({
       service: "outlet-radar",
-      version: "2.9.0",
+      version: "3.2.0",
       checkedAt: new Date().toISOString(),
       budgets: (Object.keys(PROVIDER_BUDGETS) as Array<keyof typeof PROVIDER_BUDGETS>).map((provider) => {
         const monthlyLimit = PROVIDER_BUDGETS[provider].monthly;
@@ -107,6 +118,7 @@ export async function GET(request: NextRequest) {
       refreshQueue: await getCatalogQueueStats(),
       retailerCoverage: summarizeCoverage(coverageRows),
       clicks,
+      feedIngest,
       catalog: {
         canonicalProducts: counts.canonical_products,
         retailerOffers: counts.retailer_offers,

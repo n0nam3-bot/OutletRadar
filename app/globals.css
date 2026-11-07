@@ -358,3 +358,26 @@
 
 /* v2.9: affiliate link disclosure next to the outbound link */
 .catalog-affiliate-note{display:block;margin-top:6px;font:9px/1.5 var(--mono);color:#7b8678}
+
+/* v3.0: size-level evidence on product cards and filter help */
+.catalog-size-evidence{margin:6px 0;padding:6px 8px;border:1px dashed #cfd6cb;font:10px/1.5 var(--mono);color:#6b7568}
+.catalog-size-evidence.is-verified{border-style:solid;border-color:#b9d2bd;background:#f3f8f3;color:#1f4a2a}
+.catalog-size-help{flex-basis:100%;margin:0;font:10px/1.5 var(--mono);color:#7b8678}
+
+/* v3.1: saved searches (browser only) */
+.save-search-button{margin-left:12px;display:inline-flex;align-items:center;gap:6px;font:600 10px var(--display);background:#fff;border:1px solid #cfd6cb;padding:6px 10px;cursor:pointer}
+.saved-search-changes{display:flex;flex-direction:column;gap:4px;margin:0 0 12px;padding:10px 12px;border:1px solid #b9d2bd;background:#f3f8f3;color:#1f4a2a}
+.saved-search-changes strong{font:600 13px var(--display)}
+.saved-search-changes span{font:11px/1.5 var(--body)}
+.catalog-price-drop-badge{margin:4px 0;font:600 10px var(--mono);color:#1f7a3a}
+.saved-searches{margin:0 0 22px}
+.saved-searches h3{font:600 13px var(--display);margin:0 0 8px}
+.saved-searches ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.saved-searches li{display:flex;justify-content:space-between;gap:12px;align-items:center;background:#fff;border:1px solid #e5eae2;padding:10px 12px}
+.saved-searches li small{display:block;font:9px var(--mono);color:#7b8678;margin-top:3px}
+.saved-searches p{font:11px/1.6 var(--body);color:#7b8678;margin:0}
+.saved-search-actions{display:flex;gap:6px}
+.saved-search-actions button{font:600 10px var(--display);background:#fff;border:1px solid #cfd6cb;padding:6px 10px;cursor:pointer}
+
+/* v3.2: admin feed preview */
+.admin-link-button{background:none;border:0;padding:0;font:inherit;color:#1f7a3a;text-decoration:underline;cursor:pointer}

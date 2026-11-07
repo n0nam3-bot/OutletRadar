@@ -5,6 +5,9 @@ import {
   ArrowRight, Check, ExternalLink, Heart,
   PackageSearch, Search, ShieldCheck, ShoppingBag, SlidersHorizontal, Sparkles, Tag, X,
 } from "lucide-react";
+import { catalogColorsOf, catalogFilterEvaluation } from "@/lib/catalog-filters";
+import type { SizeSystem } from "@/lib/size-match";
+import { describeSearch, loadSavedSearches, persistSavedSearches, priceSnapshot, productKey, summarizePriceChanges, upsertSavedSearch, type PriceChangeSummary, type SavedSearch, type SearchCriteria } from "@/lib/saved-searches";
 import type { CatalogBrowseCategory, CatalogBrowseProduct, MarketplaceOffer, MarketplaceSizeQuote, MarketplaceSourceStatus, NikeProduct, ProductSize } from "@/lib/types";
 
 type Tab = "search" | "saved";
@@ -34,192 +37,6 @@ const VISITOR_KEY = "nike-clearance-finder:visitor:v1";
 function money(value?: number, currency = "USD") {
   if (typeof value !== "number" || !Number.isFinite(value)) return "Price unavailable";
   return new Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 2 }).format(value);
-}
-
-function catalogAudience(product: CatalogBrowseProduct): string {
-  const text = `${product.title} ${product.brand}`.toLowerCase();
-  const hasYouthSize = [...(product.sizes ?? []), ...(product.listings ?? []).flatMap((listing) => listing.sizes ?? [])]
-    .some((size) => /\d+(?:\.\d+)?\s*y\b/i.test(size));
-  if (hasYouthSize || /\b(big kids?|grade school|gs|little kids?|preschool|ps|toddler|infant|youth|kids?|boys?|girls?)\b/.test(text)) return "kids";
-  const hasMen = /\b(men|mens|male)\b/.test(text);
-  const hasWomen = /\b(women|womens|female)\b/.test(text);
-  if (hasMen && hasWomen) return "unisex";
-  if (hasMen) return "men";
-  if (hasWomen) return "women";
-  return (product.gender ?? "Unknown").toLowerCase();
-}
-
-function normalizedCatalogSize(value: string): string {
-  return value.toLowerCase().replace(/\b(us|uk|eu|men|mens|women|womens|size)\b/g, " ").replace(/(\d)\s*(y)\b/g, "$1$2").replace(/\s+/g, " ").trim();
-}
-
-function catalogSizesOf(product: CatalogBrowseProduct, extraQuotes: MarketplaceSizeQuote[] = []): string[] {
-  return [...new Set([
-    ...(product.sizes ?? []),
-    ...(product.listings ?? []).flatMap((listing) => listing.sizes ?? []),
-    ...(product.sizeQuotes ?? []).map((quote) => quote.label),
-    ...extraQuotes.map((quote) => quote.label),
-  ].map((value) => String(value).trim()).filter(Boolean))];
-}
-
-function catalogColorsOf(product: CatalogBrowseProduct): string[] {
-  const explicit = [product.color ?? "", ...(product.colors ?? []), ...(product.listings ?? []).map((listing) => listing.color ?? "")];
-  const title = ` ${product.title.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ")} `;
-  const inferred = Object.entries(COLOR_FAMILIES).flatMap(([family, aliases]) => {
-    const terms = [family, ...aliases];
-    return terms.some((term) => title.includes(` ${term.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `)) ? [family] : [];
-  });
-  return [...new Set([...explicit, ...inferred].map((value) => value.trim()).filter(Boolean))];
-}
-
-function catalogSizeMatches(candidate: string, requested: string): boolean {
-  const target = normalizedCatalogSize(requested);
-  const value = normalizedCatalogSize(candidate);
-  if (!target || !value) return false;
-  if (value === target) return true;
-  const targetToken = target.match(/\d+(?:\.\d+)?y?/i)?.[0];
-  if (targetToken) {
-    const candidateTokens = value.match(/\d+(?:\.\d+)?y?/gi) ?? [];
-    return candidateTokens.some((token) => token.toLowerCase() === targetToken.toLowerCase());
-  }
-  return value.includes(target);
-}
-
-function catalogListedSizeMatches(candidate: string, requested: string, gender: string): boolean {
-  if (!catalogSizeMatches(candidate, requested)) return false;
-  const label = candidate.toLowerCase();
-  const targetNumber = normalizedCatalogSize(requested).match(/\d+(?:\.\d+)?/)?.[0];
-  if (!targetNumber) return true;
-  const allowed = (system: string) => gender === "all" || gender === "unisex" ||
-    (gender === "men" && system === "m") ||
-    (gender === "women" && system === "w") ||
-    (gender === "kids" && system === "y");
-  // Combined labels can use either M 11.5 / W 13 or 11.5 M / 13 W.
-  const prefixed = [...label.matchAll(/\b([mwy])\s*(\d+(?:\.\d+)?)/g)];
-  const suffixed = [...label.matchAll(/(\d+(?:\.\d+)?)\s*([mwy])\b/g)];
-  const typed = [
-    ...prefixed.map((match) => ({ system: match[1], number: match[2] })),
-    ...suffixed.map((match) => ({ system: match[2], number: match[1] })),
-  ];
-  if (typed.length) return typed.some((entry) => entry.number === targetNumber && allowed(entry.system));
-  const youthSuffix = /\b\d+(?:\.\d+)?\s*y\b/i.test(label);
-  if (youthSuffix && (gender === "men" || gender === "women")) return false;
-  if (gender === "men" && /\b(?:women|womens)\b/i.test(label)) return false;
-  if (gender === "women" && /\b(?:men|mens)\b/i.test(label)) return false;
-  return true;
-}
-
-const COLOR_FAMILIES: Record<string, string[]> = {
-  black: ["black", "triple black", "blackout", "bred"],
-  white: ["white", "off white", "off-white", "sail", "ivory", "cream", "chalk", "summit white"],
-  gray: ["gray", "grey", "cement", "wolf grey", "cool grey", "light smoke grey", "dark smoke grey", "anthracite"],
-  red: ["red", "fire red", "university red", "varsity red", "crimson", "scarlet", "cherry", "cardinal", "infrared", "bred"],
-  blue: ["blue", "royal blue", "navy", "midnight navy", "university blue", "unc blue", "obsidian", "cobalt"],
-  green: ["green", "pine green", "olive", "mint", "malachite", "jade", "sequoia"],
-  brown: ["brown", "mocha", "chocolate", "cacao", "coffee", "baroque brown"],
-  tan: ["tan", "beige", "khaki", "wheat", "sand", "taupe"],
-  pink: ["pink", "rose", "blush", "coral", "magenta"],
-  purple: ["purple", "violet", "lilac", "lavender"],
-  orange: ["orange", "safety orange", "bright mandarin"],
-  yellow: ["yellow", "maize", "golden yellow", "mustard"],
-};
-
-function colorMatches(candidate: string, requested: string): boolean {
-  const source = ` ${candidate.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim()} `;
-  const target = requested.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
-  if (!target) return true;
-  const family = Object.entries(COLOR_FAMILIES).find(([key, aliases]) => key === target || aliases.includes(target));
-  const terms = family ? [family[0], ...family[1]] : [target];
-  return terms.some((term) => source.includes(` ${term.replace(/[^a-z0-9]+/g, " ").trim()} `));
-}
-
-function quoteMatchesSize(quote: MarketplaceSizeQuote, requested: string, gender: string): boolean {
-  if (!catalogSizeMatches(quote.label, requested)) return false;
-  if (gender === "men" && quote.sizeSystem === "women") return false;
-  if (gender === "women" && quote.sizeSystem === "men") return false;
-  if (gender === "kids" && quote.sizeSystem !== "youth") return false;
-  return quote.available === true;
-}
-
-type CatalogFilters = { gender: string; releaseYear: string; size: string; color: string; minPrice: string; maxPrice: string; saleOnly: boolean };
-type CatalogFilterEvaluation = { keep: boolean; unknown: string[]; matched: number };
-
-function catalogFilterEvaluation(
-  product: CatalogBrowseProduct,
-  filters: CatalogFilters,
-  extraQuotes: MarketplaceSizeQuote[] = [],
-): CatalogFilterEvaluation {
-  const unknown: string[] = [];
-  let matched = 0;
-  const audience = catalogAudience(product);
-  if (filters.gender !== "all") {
-    if (!audience || audience === "unknown") { unknown.push("audience"); return { keep: false, unknown, matched }; }
-    if (audience === filters.gender || ((filters.gender === "men" || filters.gender === "women") && audience === "unisex")) matched++;
-    else return { keep: false, unknown, matched };
-  }
-
-  if (filters.releaseYear.trim()) {
-    const requestedYear = Number(filters.releaseYear);
-    const year = product.releaseYear ?? Number(product.title.match(/\b(?:19|20)\d{2}\b/)?.[0]);
-    if (!year) { unknown.push("release year"); return { keep: false, unknown, matched }; }
-    if (year !== requestedYear) return { keep: false, unknown, matched };
-    matched++;
-  }
-
-  if (filters.size.trim()) {
-    const listedLabels = [
-      ...(product.sizes ?? []),
-      ...(product.listings ?? []).flatMap((listing) => listing.sizes ?? []),
-    ];
-    const quotes = [...(product.sizeQuotes ?? []), ...extraQuotes];
-    const quoteMatch = quotes.some((quote) => catalogSizeMatches(quote.label, filters.size) && quote.available !== false &&
-      !(filters.gender === "men" && quote.sizeSystem === "women") &&
-      !(filters.gender === "women" && quote.sizeSystem === "men") &&
-      !(filters.gender === "kids" && quote.sizeSystem !== "youth"));
-    const listedMatch = listedLabels.some((label) => catalogListedSizeMatches(label, filters.size, filters.gender));
-    if (quoteMatch || listedMatch) matched++;
-    else {
-      if (!quotes.length && !listedLabels.length) unknown.push("size list");
-      return { keep: false, unknown, matched };
-    }
-  }
-
-  if (filters.color.trim()) {
-    const candidates = catalogColorsOf(product);
-    if (candidates.some((color) => colorMatches(color, filters.color))) matched++;
-    else {
-      if (!candidates.length) unknown.push("colorway");
-      return { keep: false, unknown, matched };
-    }
-  }
-
-  const prices = [...new Set([
-    ...(typeof product.price === "number" ? [product.price] : []),
-    ...(product.listings ?? []).flatMap((listing) => typeof listing.price === "number" ? [listing.price] : []),
-  ])];
-  const min = filters.minPrice.trim() ? Number(filters.minPrice) : undefined;
-  const max = filters.maxPrice.trim() ? Number(filters.maxPrice) : undefined;
-  const hasPriceFilter = (min !== undefined && Number.isFinite(min)) || (max !== undefined && Number.isFinite(max));
-  if (hasPriceFilter) {
-    if (!prices.length) { unknown.push("price"); return { keep: false, unknown, matched }; }
-    if (prices.some((price) => (min === undefined || !Number.isFinite(min) || price >= min) && (max === undefined || !Number.isFinite(max) || price <= max))) matched++;
-    else return { keep: false, unknown, matched };
-  }
-
-  if (filters.saleOnly) {
-    const saleSignals: boolean[] = [];
-    if (typeof product.onSale === "boolean") saleSignals.push(product.onSale);
-    for (const listing of product.listings ?? []) {
-      if (typeof listing.onSale === "boolean") saleSignals.push(listing.onSale);
-      if (typeof listing.price === "number" && typeof listing.originalPrice === "number") saleSignals.push(listing.originalPrice > listing.price);
-    }
-    if (typeof product.price === "number" && typeof product.originalPrice === "number") saleSignals.push(product.originalPrice > product.price);
-    if (!saleSignals.length) { unknown.push("sale status"); return { keep: false, unknown, matched }; }
-    if (saleSignals.some(Boolean)) matched++;
-    else return { keep: false, unknown, matched };
-  }
-
-  return { keep: true, unknown, matched };
 }
 
 function categoryOf(product: NikeProduct): Exclude<Category, "All"> {
@@ -373,10 +190,17 @@ export default function Home() {
   const [catalogGender, setCatalogGender] = useState("all");
   const [catalogReleaseYear, setCatalogReleaseYear] = useState("");
   const [catalogSize, setCatalogSize] = useState("");
+  // Which US size scale the typed size means. "auto" follows the audience filter (women -> women's, kids -> kids', otherwise men's).
+  const [catalogSizeChoice, setCatalogSizeChoice] = useState<"auto" | SizeSystem>("auto");
   const [catalogColor, setCatalogColor] = useState("");
   const [catalogMinPrice, setCatalogMinPrice] = useState("");
   const [catalogMaxPrice, setCatalogMaxPrice] = useState("");
   const [catalogSaleOnly, setCatalogSaleOnly] = useState(false);
+  // Saved searches live in this browser only (see lib/saved-searches.ts).
+  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
+  const [activeSavedSearchId, setActiveSavedSearchId] = useState<string | null>(null);
+  const [pendingSavedRun, setPendingSavedRun] = useState(false);
+  const [savedSearchChanges, setSavedSearchChanges] = useState<(PriceChangeSummary & { label: string; since?: string }) | null>(null);
   const [catalogFiltersOpen, setCatalogFiltersOpen] = useState(false);
   const [catalogProducts, setCatalogProducts] = useState<CatalogBrowseProduct[]>([]);
   const [catalogSizeQuotes, setCatalogSizeQuotes] = useState<Record<string, MarketplaceSizeQuote[]>>({});
@@ -546,23 +370,99 @@ export default function Home() {
     return [...new Set(labels)].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [availabilityClock, products, saved, sizeDetails, sizeDetailsCheckedAt, tab]);
 
+  const catalogSizeSystem: SizeSystem = catalogSizeChoice === "auto" ? (catalogGender === "women" ? "women" : catalogGender === "kids" ? "youth" : "men") : catalogSizeChoice;
   const catalogFilters = useMemo(() => ({
     gender: catalogGender,
     releaseYear: catalogReleaseYear,
     size: catalogSize,
+    sizeSystem: catalogSizeSystem,
     color: catalogColor,
     minPrice: catalogMinPrice,
     maxPrice: catalogMaxPrice,
     saleOnly: catalogSaleOnly,
-  }), [catalogGender, catalogReleaseYear, catalogSize, catalogColor, catalogMinPrice, catalogMaxPrice, catalogSaleOnly]);
+  }), [catalogGender, catalogReleaseYear, catalogSize, catalogSizeSystem, catalogColor, catalogMinPrice, catalogMaxPrice, catalogSaleOnly]);
 
-  const catalogVisibleProducts = useMemo(() => {
-    return catalogProducts
-      .map((product) => ({ product, evaluation: catalogFilterEvaluation(product, catalogFilters, catalogSizeQuotes[product.id] ?? []) }))
-      .filter(({ evaluation }) => evaluation.keep)
-      .sort((a, b) => b.evaluation.matched - a.evaluation.matched || a.product.title.localeCompare(b.product.title))
-      .map(({ product }) => product);
-  }, [catalogProducts, catalogFilters, catalogSizeQuotes]);
+  const catalogEvaluated = useMemo(() => catalogProducts
+    .map((product) => ({ product, evaluation: catalogFilterEvaluation(product, catalogFilters, catalogSizeQuotes[product.id] ?? []) }))
+    .filter(({ evaluation }) => evaluation.keep)
+    .sort((a, b) =>
+      b.evaluation.matched - a.evaluation.matched ||
+      // With a size selected: products with a verified price for that size first, cheapest size price first.
+      Number(b.evaluation.size?.state === "verified") - Number(a.evaluation.size?.state === "verified") ||
+      (a.evaluation.size?.price ?? Infinity) - (b.evaluation.size?.price ?? Infinity) ||
+      a.product.title.localeCompare(b.product.title)),
+  [catalogProducts, catalogFilters, catalogSizeQuotes]);
+  const catalogVisibleProducts = useMemo(() => catalogEvaluated.map(({ product }) => product), [catalogEvaluated]);
+  const catalogSizeEvidence = useMemo(() => new Map(catalogEvaluated.map(({ product, evaluation }) => [product.id, evaluation.size] as const)), [catalogEvaluated]);
+
+  // ---- Saved searches (browser-only) ----
+  useEffect(() => { setSavedSearches(loadSavedSearches(typeof window === "undefined" ? null : window.localStorage)); }, []);
+
+  // Lowest relevant price per visible product: the selected size's verified price when there is one.
+  const catalogTrackedPrices = useMemo(() => catalogEvaluated.flatMap(({ product, evaluation }) => {
+    const sizePrice = evaluation.size?.state === "verified" ? evaluation.size.price : undefined;
+    const candidates = [sizePrice, ...(sizePrice === undefined ? [product.price, ...(product.listings ?? []).map((listing) => listing.price)] : [])]
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
+    return candidates.length ? [{ key: productKey(product), title: product.title, price: Math.min(...candidates) }] : [];
+  }), [catalogEvaluated]);
+
+  function currentCriteria(): SearchCriteria {
+    return { query: query.trim(), type: catalogType, brand: catalogBrand, gender: catalogGender, releaseYear: catalogReleaseYear.trim(), size: catalogSize.trim(), sizeChoice: catalogSizeChoice, color: catalogColor.trim(), minPrice: catalogMinPrice.trim(), maxPrice: catalogMaxPrice.trim(), saleOnly: catalogSaleOnly };
+  }
+
+  function saveCurrentSearch() {
+    const criteria = currentCriteria();
+    if (criteria.query.length < 2) return;
+    const next = upsertSavedSearch(savedSearches, criteria, priceSnapshot(catalogTrackedPrices));
+    setSavedSearches(next);
+    const stored = persistSavedSearches(window.localStorage, next);
+    setMessage(stored ? "Search saved on this device. Run it again from Watchlist to see price changes." : "Could not save the search: this browser blocked local storage.");
+  }
+
+  function runSavedSearch(saved: SavedSearch) {
+    setTab("search");
+    setQuery(saved.query); setCatalogType(saved.type as CatalogBrowseCategory); setCatalogBrand(saved.brand); setCatalogGender(saved.gender);
+    setCatalogReleaseYear(saved.releaseYear); setCatalogSize(saved.size); setCatalogSizeChoice(saved.sizeChoice); setCatalogColor(saved.color);
+    setCatalogMinPrice(saved.minPrice); setCatalogMaxPrice(saved.maxPrice); setCatalogSaleOnly(saved.saleOnly);
+    setSavedSearchChanges(null);
+    setActiveSavedSearchId(saved.id);
+    setPendingSavedRun(true);
+    document.getElementById("catalog")?.scrollIntoView({ behavior: "smooth" });
+  }
+
+  function deleteSavedSearch(id: string) {
+    const next = savedSearches.filter((item) => item.id !== id);
+    setSavedSearches(next);
+    persistSavedSearches(window.localStorage, next);
+  }
+
+  // Runs the saved search once the restored filters are in state (effects see the updated values).
+  useEffect(() => {
+    if (!pendingSavedRun) return;
+    setPendingSavedRun(false);
+    void browseCatalog();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSavedRun]);
+
+  // After a saved search finishes loading (size prices arrive a moment later), report price changes
+  // against its previous snapshot, then store the new snapshot.
+  useEffect(() => {
+    if (!activeSavedSearchId || catalogStatus !== "success") return;
+    const timer = window.setTimeout(() => {
+      const saved = savedSearches.find((item) => item.id === activeSavedSearchId);
+      if (!saved) { setActiveSavedSearchId(null); return; }
+      const summary = summarizePriceChanges(saved.prices, catalogTrackedPrices);
+      setSavedSearchChanges({ ...summary, label: describeSearch(saved), since: saved.lastRunAt });
+      const next = upsertSavedSearch(savedSearches, currentCriteria(), priceSnapshot(catalogTrackedPrices));
+      setSavedSearches(next);
+      persistSavedSearches(window.localStorage, next);
+      setActiveSavedSearchId(null);
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSavedSearchId, catalogStatus, catalogTrackedPrices]);
+
+  const savedDropByKey = useMemo(() => new Map((savedSearchChanges?.drops ?? []).map((drop) => [drop.key, drop] as const)), [savedSearchChanges]);
 
   const catalogUnverifiedFilterCount = useMemo(() => catalogProducts.filter(
     (product) => !catalogFilterEvaluation(product, catalogFilters, catalogSizeQuotes[product.id] ?? []).keep && catalogFilterEvaluation(product, catalogFilters, catalogSizeQuotes[product.id] ?? []).unknown.length > 0,
@@ -932,12 +832,14 @@ export default function Home() {
               <button type="button" className={`refine-toggle ${catalogFiltersOpen ? "refine-toggle-active" : ""}`} onClick={() => setCatalogFiltersOpen((value) => !value)}><SlidersHorizontal size={14} /> Filters {catalogFiltersOpen ? <X size={13} /> : <span className="refine-count">{[Boolean(catalogSize), Boolean(catalogColor), Boolean(catalogMinPrice || catalogMaxPrice), catalogSaleOnly].filter(Boolean).length || ""}</span>}</button>
             </div>
             {catalogFiltersOpen && <div className="hunt-advanced-filters">
-              <label className="search-filter-field"><span>SIZE</span><input value={catalogSize} onChange={(event) => setCatalogSize(event.target.value)} placeholder="e.g. 11.5 or 5Y" /></label>
+              <label className="search-filter-field"><span>SIZE (US)</span><input value={catalogSize} onChange={(event) => setCatalogSize(event.target.value)} placeholder="e.g. 10.5, W 8 or 5Y" /></label>
+              <label className="search-filter-field"><span>SIZE TYPE</span><select value={catalogSizeChoice} onChange={(event) => setCatalogSizeChoice(event.target.value as "auto" | SizeSystem)}><option value="auto">Auto ({catalogSizeSystem === "women" ? "women\u2019s" : catalogSizeSystem === "youth" ? "kids\u2019" : "men\u2019s"})</option><option value="men">Men&rsquo;s US</option><option value="women">Women&rsquo;s US</option><option value="youth">Kids&rsquo; (Y)</option></select></label>
+              {catalogSize.trim() && <p className="catalog-size-help">Press <strong>Apply refinements</strong> to check live size prices on StockX and GOAT for the first 20 results. Sizes are compared within the same scale; men&rsquo;s and women&rsquo;s sizes are converted only for Nike, Jordan, New Balance and adidas, and are labelled as converted.</p>}
               <label className="search-filter-field"><span>COLOR</span><input value={catalogColor} onChange={(event) => setCatalogColor(event.target.value)} placeholder="e.g. black, red" /></label>
               <label className="search-filter-field"><span>MIN PRICE ($)</span><input type="number" min="0" inputMode="decimal" value={catalogMinPrice} onChange={(event) => setCatalogMinPrice(event.target.value)} placeholder="No min" /></label>
               <label className="search-filter-field"><span>MAX PRICE ($)</span><input type="number" min="0" inputMode="decimal" value={catalogMaxPrice} onChange={(event) => setCatalogMaxPrice(event.target.value)} placeholder="No max" /></label>
               <button type="button" className={`sale-toggle search-sale-toggle ${catalogSaleOnly ? "sale-toggle-active" : ""}`} onClick={() => setCatalogSaleOnly((value) => !value)}><Tag size={15} /> Sale only <span className="toggle-switch"><span /></span></button>
-              <button type="button" className="clear-refinements" onClick={() => { setCatalogSize(""); setCatalogColor(""); setCatalogMinPrice(""); setCatalogMaxPrice(""); setCatalogSaleOnly(false); }}>Clear refinements</button>
+              <button type="button" className="clear-refinements" onClick={() => { setCatalogSize(""); setCatalogSizeChoice("auto"); setCatalogColor(""); setCatalogMinPrice(""); setCatalogMaxPrice(""); setCatalogSaleOnly(false); }}>Clear refinements</button>
               <button type="button" className="apply-refinements" disabled={catalogStatus === "loading"} onClick={() => void browseCatalog()}>{catalogStatus === "loading" ? "Applying…" : "Apply refinements"}</button>
             </div>}
             <p className="hunt-note">Choose an item type, optional brand, audience and release year, then describe the model. Size, color, price and sale refine the results without starting a new provider search.</p>
@@ -948,13 +850,18 @@ export default function Home() {
       <section className="catalog-explorer catalog-results-section" id="catalog" aria-label="Product catalog">
         <div className="catalog-results-heading">
           <div><div className="eyebrow dark-eyebrow">PRODUCT CATALOG</div><h2>{query.trim() ? `Matches for “${query.trim()}”` : "Explore products across brands."}</h2></div>
-          <span className="catalog-result-count">{catalogStatus === "success" ? `${catalogVisibleProducts.length} of ${catalogProducts.length} matches` : "Marketplace catalog discovery"}</span>
+          <span className="catalog-result-count">{catalogStatus === "success" ? `${catalogVisibleProducts.length} of ${catalogProducts.length} matches` : "Marketplace catalog discovery"}</span>{catalogStatus === "success" && <button type="button" className="save-search-button" onClick={saveCurrentSearch}><Heart size={13} /> Save this search</button>}
         </div>
         {catalogError && <div className="store-error">{catalogError}</div>}
         {catalogStatus === "loading" && <div className="store-results-loading">Searching product catalogs across connected marketplaces…</div>}
         {catalogStatus === "idle" && <div className="catalog-explorer-empty"><strong>Start with an item type and model.</strong><span>Browse known models from connected catalogs, including older releases that the original brand may no longer sell.</span></div>}
         {catalogStatus === "success" && <div className="catalog-browser-results">
           {catalogNotice && <div className="catalog-incomplete-notice" role="status"><strong>Showing saved results</strong><span>{catalogNotice}</span></div>}
+          {savedSearchChanges && <div className="saved-search-changes" role="status">
+            <strong>{savedSearchChanges.drops.length ? `${savedSearchChanges.drops.length} price drop${savedSearchChanges.drops.length === 1 ? "" : "s"}` : "No price drops"} since {savedSearchChanges.since ? new Date(savedSearchChanges.since).toLocaleDateString() : "your last check"}</strong>
+            <span>{savedSearchChanges.label} · compared {savedSearchChanges.compared} product{savedSearchChanges.compared === 1 ? "" : "s"}{savedSearchChanges.newProducts ? ` · ${savedSearchChanges.newProducts} new` : ""}{savedSearchChanges.rises.length ? ` · ${savedSearchChanges.rises.length} higher` : ""}</span>
+            {savedSearchChanges.drops.slice(0, 5).map((drop) => <span key={drop.key}>↓ {drop.title}: {money(drop.from)} → <b>{money(drop.to)}</b></span>)}
+          </div>}
           <div className="catalog-browser-meta"><strong>{catalogVisibleProducts.length} matching product{catalogVisibleProducts.length === 1 ? "" : "s"}</strong><span>{catalogCachedAt ? `Cached ${new Date(catalogCachedAt).toLocaleString()}` : "Fresh discovery"} · Offers are grouped by product model</span></div>
           {catalogUnverifiedFilterCount > 0 && <div className="catalog-filter-summary">{catalogUnverifiedFilterCount} products were excluded because provider data did not confirm the selected refinements. Clear a filter to broaden results.</div>}
           {catalogSizeQuoteSources.length > 0 && <div className="catalog-size-source-note">Size data: {catalogSizeQuoteSources.map((source) => `${source.name} — ${source.message}`).join(" · ")}</div>}
@@ -967,7 +874,17 @@ export default function Home() {
             return <article className={`catalog-product-card ${expanded ? "catalog-product-card-expanded" : ""}`} key={product.id}>
               <ProductImageFrame className="catalog-product-image" alt={product.title} sources={[product.imageUrl, ...(product.listings ?? []).map((listing) => listing.imageUrl)]} badge={sale ? "SALE" : undefined} />
               <div className="catalog-product-body"><div className="catalog-product-brand">{product.brand} <span>{product.category.toUpperCase()}</span></div><h3>{product.title}</h3>
+                {savedDropByKey.has(productKey(product)) && <div className="catalog-price-drop-badge">↓ {money((savedDropByKey.get(productKey(product))?.from ?? 0) - (savedDropByKey.get(productKey(product))?.to ?? 0))} since you last checked</div>}
                 <div className="catalog-product-facts">{product.gender && product.gender !== "Unknown" ? product.gender : "Audience not listed"}{product.releaseYear ? ` · ${product.releaseYear}` : ""}{catalogColorsOf(product).length ? ` · ${catalogColorsOf(product).slice(0, 2).join(", ")}` : ""}</div>
+                {catalogSize.trim() && (() => {
+                  const evidence = catalogSizeEvidence.get(product.id);
+                  if (!evidence) return null;
+                  const where = evidence.source === "stockx" ? "StockX ask" : evidence.source === "goat" ? "GOAT ask" : evidence.source === "flightclub" ? "Flight Club" : evidence.retailer ?? "retailer";
+                  const scale = catalogSizeSystem === "women" ? "women\u2019s" : catalogSizeSystem === "youth" ? "kids\u2019" : "men\u2019s";
+                  return evidence.state === "verified"
+                    ? <div className="catalog-size-evidence is-verified">Size {catalogSize.trim()} ({scale}): <strong>{typeof evidence.price === "number" ? `from ${money(evidence.price, evidence.currency || "USD")}` : "available"}</strong> · {where}{evidence.kind === "converted" ? ` · listed as ${evidence.label}, converted` : ""}</div>
+                    : <div className="catalog-size-evidence">Size listed ({evidence.label}){evidence.kind === "converted" ? ", converted" : evidence.kind === "assumed" ? ", scale not stated" : ""} · stock and price for this size are not confirmed</div>;
+                })()}
                 {catalogSizeQuotes[product.id]?.some((quote) => quote.available === true) && <div className="catalog-verified-sizes">Size signals: {catalogSizeQuotes[product.id].filter((quote) => quote.available === true).slice(0, 5).map((quote) => `${quote.label} (${quote.source === "stockx" ? "StockX ask" : quote.retailer})`).join(" · ")}</div>}
                 {product.price !== undefined && <div className="catalog-price-row"><strong>{money(product.price, product.currency || "USD")}</strong>{product.originalPrice && product.originalPrice > product.price && <del>{money(product.originalPrice, product.currency || "USD")}</del>}</div>}
                 {product.styleCode && <small>Style / SKU: {product.styleCode}</small>}<div className="catalog-product-sources">{product.listings.length} retailer listing{product.listings.length === 1 ? "" : "s"} · {product.sources.join(" · ")}</div>
@@ -1007,6 +924,13 @@ export default function Home() {
       <section className="watchlist-section" id="watchlist">
         <div className="watchlist-heading"><div><div className="eyebrow dark-eyebrow">YOUR SAVED FINDS</div><h2>Watchlist</h2></div><span>{saved.length} saved</span></div>
         {message && <div className="toast-message"><Check size={15} /> {message}</div>}
+        <div className="saved-searches">
+          <h3>Saved searches</h3>
+          {savedSearches.length ? <ul>{savedSearches.map((saved) => <li key={saved.id}>
+            <div><strong>{describeSearch(saved)}</strong><small>{saved.lastRunAt ? `Last checked ${new Date(saved.lastRunAt).toLocaleDateString()}` : "Not checked yet"} · {Object.keys(saved.prices).length} product{Object.keys(saved.prices).length === 1 ? "" : "s"} tracked</small></div>
+            <div className="saved-search-actions"><button type="button" onClick={() => runSavedSearch(saved)}>Run &amp; check prices</button><button type="button" onClick={() => deleteSavedSearch(saved.id)} aria-label="Delete saved search"><X size={13} /></button></div>
+          </li>)}</ul> : <p>No saved searches yet. Run a search, then press <strong>Save this search</strong>. Saved searches stay in this browser; running one compares today&rsquo;s prices with the last time you checked.</p>}
+        </div>
         {saved.length ? <div className="watchlist-grid">{saved.map((product) => <article className="watchlist-card" key={product.url}>{product.imageUrl ? <img src={product.imageUrl} alt="" /> : <PackageSearch size={26} />}<div><strong>{product.title}</strong><small>{product.subtitle || product.styleCode || "Saved product"}</small><span>{money(product.price, product.currency)}</span><a href={product.url} target="_blank" rel="noreferrer">Open listing <ExternalLink size={11} /></a></div><button type="button" onClick={() => void toggleSaved(product)} aria-label="Remove from watchlist"><X size={15} /></button></article>)}</div> : <div className="catalog-explorer-empty"><strong>No saved products yet.</strong><span>Save a model from the catalog using its bookmark icon.</span></div>}
       </section>
 

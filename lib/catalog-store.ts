@@ -5,7 +5,11 @@ import type { CatalogBrowseProduct, CatalogListing, MarketplaceOffer, Marketplac
 // Sources whose offers are saved to the normalized catalog (24 h expiry). "channel3" is
 // deliberately absent: Channel3's terms ask that prices, availability and offer URLs are
 // not kept for more than a few hours, so its offers live only in short-lived caches.
-const SOURCE_KEYS = new Set(["stockx", "goat", "flightclub", "kickscrew", "shopping", "nike"]);
+const SOURCE_KEYS = new Set(["stockx", "goat", "flightclub", "kickscrew", "shopping", "nike", "impact"]);
+// Offers expire after 24 hours unless a source refreshes more slowly. Impact feed items are re-read in
+// pages over several days, so they stay for 7 days.
+const OFFER_TTL_HOURS: Record<string, number> = { impact: 168 };
+const offerTtlHours = (source: string) => OFFER_TTL_HOURS[source] ?? 24;
 
 function norm(value: string): string {
   return value.toLowerCase().normalize("NFKD").replace(/[’']/g, "").replace(/[^a-z0-9.]+/g, " ").replace(/\s+/g, " ").trim();
@@ -72,7 +76,7 @@ type OfferRow = {
   listing_url: string; listing_title: string; image_url?: string; style_code?: string;
   colorway?: string; audience: string; release_year?: number; price?: number;
   original_price?: number; currency: string; condition_label: string; availability_state: string;
-  availability_label: string; sizes: Array<{ label: string; system: string; state: string; price?: number; currency: string; status?: string }>;
+  availability_label: string; ttl_hours?: number; sizes: Array<{ label: string; system: string; state: string; price?: number; currency: string; status?: string }>;
   metadata: Record<string, unknown>;
 };
 
@@ -95,6 +99,7 @@ function offerRowsForProduct(product: CatalogBrowseProduct, identityKey: string)
     condition_label: "Unknown",
     availability_state: "unknown",
     availability_label: "Catalog listing only; selected-size availability is not confirmed.",
+    ttl_hours: offerTtlHours(listing.source),
     sizes: (listing.sizes ?? []).map((label) => ({ label, system: labelSizeSystem(label, listing.gender), state: "unknown", currency: listing.currency || "USD", status: "Listed by catalog source; stock not confirmed." })),
     metadata: { onSale: listing.onSale ?? null, source: listing.source },
   }));
@@ -143,6 +148,7 @@ export async function persistCatalogSnapshot(products: CatalogBrowseProduct[], a
         condition_label: offer.condition || "Unknown",
         availability_state: offer.availability || "unknown",
         availability_label: offer.availabilityLabel || "Availability not confirmed.",
+        ttl_hours: offerTtlHours(offer.source),
         sizes: quotes.length
           ? quotes.map((quote) => ({ label: quote.label, system: quote.sizeSystem || "unknown", state: quote.available === true ? "available" : quote.available === false ? "unavailable" : "unknown", price: quote.price, currency: quote.currency || offer.currency || "USD", status: quote.status }))
           : (offer.sizes ?? []).map((label) => ({ label, system: labelSizeSystem(label, offer.gender), state: "unknown", currency: offer.currency || "USD", status: "Listed by source; availability not confirmed." })),
@@ -186,7 +192,7 @@ export async function persistCatalogSnapshot(products: CatalogBrowseProduct[], a
         listing_url text, listing_title text, image_url text, style_code text,
         colorway text, audience text, release_year integer, price numeric,
         original_price numeric, currency text, condition_label text,
-        availability_state text, availability_label text, sizes jsonb, metadata jsonb
+        availability_state text, availability_label text, ttl_hours integer, sizes jsonb, metadata jsonb
       )
     ), offer_upsert AS (
       INSERT INTO retailer_offers (
@@ -199,7 +205,7 @@ export async function persistCatalogSnapshot(products: CatalogBrowseProduct[], a
         i.listing_title, i.image_url, i.style_code, i.colorway, COALESCE(i.audience, 'Unknown'),
         i.release_year, i.price, i.original_price, COALESCE(i.currency, 'USD'),
         COALESCE(i.condition_label, 'Unknown'), COALESCE(i.availability_state, 'unknown'),
-        i.availability_label, NOW(), NOW() + INTERVAL '24 hours', COALESCE(i.metadata, '{}'::jsonb)
+        i.availability_label, NOW(), NOW() + make_interval(hours => COALESCE(i.ttl_hours, 24)), COALESCE(i.metadata, '{}'::jsonb)
       FROM incoming i JOIN canonical_products cp ON cp.identity_key = i.identity_key
       ON CONFLICT (source, listing_url) DO UPDATE SET
         product_id = EXCLUDED.product_id,
@@ -216,7 +222,7 @@ export async function persistCatalogSnapshot(products: CatalogBrowseProduct[], a
         currency = EXCLUDED.currency,
         availability_state = CASE WHEN EXCLUDED.availability_state = 'unknown' AND retailer_offers.availability_state IN ('available','unavailable') AND retailer_offers.expires_at > NOW() THEN retailer_offers.availability_state ELSE EXCLUDED.availability_state END,
         availability_label = CASE WHEN EXCLUDED.availability_state = 'unknown' AND retailer_offers.availability_state IN ('available','unavailable') AND retailer_offers.expires_at > NOW() THEN retailer_offers.availability_label ELSE EXCLUDED.availability_label END,
-        last_seen_at = NOW(), expires_at = NOW() + INTERVAL '24 hours', metadata = retailer_offers.metadata || EXCLUDED.metadata
+        last_seen_at = NOW(), expires_at = EXCLUDED.expires_at, metadata = retailer_offers.metadata || EXCLUDED.metadata
       RETURNING id, source, listing_url
     ), size_input AS (
       SELECT o.id AS offer_id, size_row.value->>'label' AS size_label,

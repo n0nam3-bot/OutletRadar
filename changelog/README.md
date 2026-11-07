@@ -4,6 +4,9 @@ Release notes for each Outlet Radar version, newest first. Upgrade instructions 
 
 | Version | Summary |
 |---|---|
+| [v3.2.0](./v3.2.0.md) | Optional bulk feed ingestion (Impact); Nike catalog read-back fix |
+| [v3.1.0](./v3.1.0.md) | Saved searches with price-drop tracking (browser-only) |
+| [v3.0.0](./v3.0.0.md) | Accurate size filtering: size scales, conversion, verified per-size prices |
 | [v2.9.0](./v2.9.0.md) | Affiliate link templates for stores you have joined |
 | [v2.8.0](./v2.8.0.md) | Anonymous outbound click counts and admin report |
 | [v2.7.0](./v2.7.0.md) | Admin live connection test and store checklist |

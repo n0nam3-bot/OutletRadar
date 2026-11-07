@@ -107,3 +107,21 @@ export async function impactOffers(items: Record<string, unknown>[]): Promise<Ma
   }
   return out;
 }
+
+/** Advertiser catalogs available to this publisher account (id + advertiser name). */
+export async function listImpactCatalogs(): Promise<Array<{ id: string; name: string }>> {
+  const payload = await impactGet("/Catalogs", { PageSize: "100" });
+  const catalogs = Array.isArray(payload.Catalogs) ? payload.Catalogs : [];
+  return catalogs.map((raw) => {
+    const catalog = obj(raw);
+    return { id: text(catalog?.Id, catalog?.CatalogId), name: text(catalog?.CampaignName, catalog?.AdvertiserName, catalog?.Name) || "Unnamed catalog" };
+  }).filter((catalog) => catalog.id);
+}
+
+/** One page of a catalog's items. `numPages` comes from Impact's pagination fields when present. */
+export async function fetchImpactCatalogItems(catalogId: string, page: number, pageSize: number): Promise<{ items: Record<string, unknown>[]; numPages: number | null }> {
+  const payload = await impactGet(`/Catalogs/${encodeURIComponent(catalogId)}/Items`, { Page: String(page), PageSize: String(pageSize) });
+  const items = Array.isArray(payload.Items) ? payload.Items.map(obj).filter((item): item is Record<string, unknown> => !!item) : [];
+  const pages = Number(payload["@numpages"]);
+  return { items, numPages: Number.isFinite(pages) && pages > 0 ? pages : null };
+}

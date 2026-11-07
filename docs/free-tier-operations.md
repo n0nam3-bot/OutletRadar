@@ -41,6 +41,8 @@ Most brands (adidas, New Balance, Puma, Converse, Reebok, Vans) publish no free 
 - **Impact partner catalogs** (built in): searches the product catalogs of every brand and store that has approved your Impact account, with your affiliate tracking links. Join more programs in Impact (adidas, New Balance, Puma, Reebok, Vans, Converse...) to widen coverage. Other networks (Rakuten, CJ, Awin) are not built in yet.
 - **eBay Browse API** (built in): new fixed-price eBay listings in Compare, with a large free daily quota. Used live only; eBay's license terms limit how long its data may be kept.
 
+Optional bulk ingestion of Impact catalogs (README: Bulk feed ingestion) spends one Impact budget unit per 250-item page and stores offers in Neon for 7 days; it stops at `FEED_MAX_DB_MB` (default 350 MB) to protect Neon's free 0.5 GB.
+
 Use `/admin/providers` → **Run connection test** to confirm each provider works and which stores it returns for a test search, and **Retailer coverage** to see which stores have actually appeared in saved results.
 
 ## Scheduled warm-up

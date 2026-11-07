@@ -5,6 +5,7 @@ import { catalogCacheKey, discoverCatalog } from "@/lib/catalog-discovery";
 import { claimCatalogRefreshes, completeCatalogRefresh, pruneCatalogRefreshQueue } from "@/lib/catalog-queue";
 import { canonicalQuery } from "@/lib/query-normalize";
 import { WARM_SEEDS } from "@/lib/warm-seeds";
+import { feedEnabled, runFeedIngest } from "@/lib/feed-ingest";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -58,7 +59,7 @@ async function dueSeeds(limit: number): Promise<Job[]> {
 export async function GET(request: NextRequest) {
   if (!authorized(request)) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   if (!getDb()) return NextResponse.json({ error: "Warm-up requires DATABASE_URL." }, { status: 503 });
-  if (!process.env.PCKT_API_KEY && !process.env.SERPAPI_API_KEY && !process.env.API_SH_KEY) {
+  if (!process.env.PCKT_API_KEY && !process.env.SERPAPI_API_KEY && !process.env.API_SH_KEY && !feedEnabled()) {
     return NextResponse.json({ ok: true, skipped: "No provider keys are configured, so there is nothing to warm." });
   }
 
@@ -89,5 +90,8 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, ran: results.length, elapsedMs: Date.now() - started, results });
+  // Optional bulk feed ingestion with whatever time is left in this run (off unless FEED_INGEST_ENABLED=true).
+  const feed = feedEnabled() ? await runFeedIngest({ deadline: started + 55_000 }) : undefined;
+
+  return NextResponse.json({ ok: true, ran: results.length, elapsedMs: Date.now() - started, results, ...(feed ? { feed } : {}) });
 }

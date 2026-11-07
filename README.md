@@ -6,12 +6,14 @@ Built with Next.js 15, Vercel and Neon Postgres, and designed to keep working on
 
 > **Limitations:** the catalog is a discovery index, not a complete product master. A catalog record is not proof of a current listing or of size-level availability, and the app does not claim physical-store inventory. Always confirm price, size and availability on the seller's page.
 
-**Contents:** [What it does](#what-it-does) · [How it works](#how-it-works) · [Setup](#setup) · [Environment variables](#environment-variables) · [Affiliate links](#affiliate-links) · [Operating it](#operating-it) · [Updating](#updating) · [API routes](#api-routes) · [Project structure](#project-structure) · [Docs and changelog](#docs-and-changelog) · [Data and license](#data-and-license)
+**Contents:** [What it does](#what-it-does) · [How it works](#how-it-works) · [Setup](#setup) · [Environment variables](#environment-variables) · [Affiliate links](#affiliate-links) · [Bulk feed ingestion](#bulk-feed-ingestion) · [Operating it](#operating-it) · [Updating](#updating) · [API routes](#api-routes) · [Project structure](#project-structure) · [Docs and changelog](#docs-and-changelog) · [Data and license](#data-and-license)
 
 ## What it does
 
 - **Structured discovery.** Choose an item type, optional brand, audience and release year, and describe the model (at least two characters). Shorthand such as `aj1`, `af1` or `nb 550` is understood.
 - **Local refinements.** Size, color, price range and sale-only filter the results already on screen; they never spend provider credits.
+- **Accurate sizes with prices.** Sizes are matched within a US scale (men's, women's, kids') with a **Size type** control; men's and women's sizes are converted only for brands with a known chart (Nike, Jordan, New Balance, adidas) and labelled as converted. Cards show the verified price for your size from StockX/GOAT/Flight Club, or mark a size as listed but unconfirmed.
+- **Saved searches.** Save a search (with its filters and size) in your browser; running it again reports price drops since you last checked. Nothing is stored on the server.
 - **Grouped products.** Listings from different retailers that describe the same model are combined into one card. Conflicting known year, audience or color keeps variants apart.
 - **Exact-product comparison.** **Compare offers** expands a card to show that model's direct retailer listings: seller title, price, size signals and product link. With a Channel3 key it also adds offers from many other stores and brand sites (adidas, New Balance, Puma, Reebok, Vans, Foot Locker and more), with eBay keys it adds new fixed-price eBay listings, and with Impact keys it adds affiliate-linked offers from the brands and stores that approved your account. Similar-but-different models are excluded.
 - **Never an empty page.** If a source is out of free lookups, paused or failing, saved results are shown with a clear notice and the search is queued for an automatic refresh.
@@ -45,6 +47,8 @@ flowchart TD
 **Cost control.** Browsing always queries StockX and GOAT (0.7 PCKT credits); Flight Club and Kicks Crew (1.5) run only while at least half of the day's allowance remains. Gender, size, color, price and sale are applied locally. Comparing a product reuses the retailer URLs already grouped with it and runs no broad search; the only live calls are one optional search each to Channel3, eBay and Impact, each cached for 3 hours and never saved to the catalog (both providers ask that offer data not be kept longer).
 
 **Keeping results fresh.** Incomplete answers are never cached. They go into `catalog_refresh_queue`, and a daily job (`/api/cron/warm-catalog`) completes them, then refreshes popular searches from `lib/warm-seeds.ts`, using at most 40% of the day's budget.
+
+**Sizes.** The size filter compares US sizes within one scale and never guesses: a bare "10" counts as men's only for a men's search, UK/EU labels are ignored, and conversion is limited to Nike, Jordan, New Balance and adidas. A size is *verified* only when StockX, GOAT or Flight Club reports an active ask for it (and then its price is shown and used by the price filter); a retailer-listed size is shown as unconfirmed.
 
 **Size data** is demand-driven: a size refinement triggers one batched StockX/GOAT lookup (up to 20 products), and Compare offers checks the selected product. Only explicit provider signals are stored as available or unavailable; everything else stays *unverified*.
 
@@ -110,6 +114,8 @@ Without `DATABASE_URL` the catalog returns an error: Neon is required.
 | `EBAY_CAMPAIGN_ID` | Optional | eBay Partner Network campaign id for affiliate links |
 | `IMPACT_ACCOUNT_SID`, `IMPACT_AUTH_TOKEN` | Optional | Impact partner offers in Compare |
 | `IMPACT_DAILY_BUDGET`, `IMPACT_MONTHLY_BUDGET` | Optional | Default 500 and 15000 calls |
+| `FEED_INGEST_ENABLED`, `IMPACT_FEED_CATALOG_IDS` | Optional | Turn on bulk Impact feed ingestion and choose the catalogs; see [Bulk feed ingestion](#bulk-feed-ingestion) |
+| `FEED_PAGES_PER_RUN`, `FEED_MAX_DB_MB`, `FEED_ITEM_REGEX` | Optional | Pages per run (default 2), database size limit (default 350 MB), which items to keep (default footwear) |
 | `AFFILIATE_LINK_TEMPLATES` | Optional | JSON map of store host to your affiliate tracking-link template; see [Affiliate links](#affiliate-links) |
 | `EBAY_DAILY_BUDGET`, `EBAY_MONTHLY_BUDGET` | Optional | Default 3000 and 90000 calls |
 | `CRON_SECRET` | Yes | Authorizes the cron jobs and the admin dashboard; use a random 32+ character value |
@@ -133,6 +139,17 @@ Links in **Compare offers** can earn commission in three ways:
 3. Everything else stays a plain link.
 
 Wrapped links show a short disclosure ("Affiliate link: Outlet Radar may earn a commission at no cost to you."). Check each network's program terms and the FTC disclosure rules for your country. The **Outbound clicks** report on `/admin/providers` shows which stores your visitors actually click, which tells you which programs to apply to.
+
+## Bulk feed ingestion
+
+Optional and **off by default**. It loads the product catalogs of the advertisers that approved your Impact account into the shared catalog, so catalog browse shows their offers (brand and store sites such as adidas, New Balance, Puma, Foot Locker) without a live call per search.
+
+1. Add the Impact keys and run `db/migrations/006_feed_ingest_state.sql` in Neon.
+2. Open `/admin/providers` → **Bulk feed ingestion** → **Preview Impact feeds**. It lists your catalogs and shows one page of data, how many items pass the footwear filter, and example products. Check that it looks right.
+3. Set `IMPACT_FEED_CATALOG_IDS` (comma-separated catalog ids) and `FEED_INGEST_ENABLED=true` in Vercel, then redeploy.
+4. The daily warm-up reads `FEED_PAGES_PER_RUN` pages (default 2, 250 items each, one Impact budget unit per page) and remembers where it stopped. For faster loading, call `GET /api/cron/ingest-feeds?pages=6` with your `CRON_SECRET` from a GitHub Actions schedule.
+
+Safeguards: only items that match the item filter (default footwear) and have a brand are kept; variants are collapsed into one listing with in-stock sizes; offers are kept 7 days and pruned 3 days after expiry; ingestion stops at `FEED_MAX_DB_MB` (default 350 MB, Neon's free plan allows 512 MB). Review the advertisers' program terms for how feed data may be shown.
 
 ## Operating it
 
@@ -164,8 +181,8 @@ Releases are applied by uploading a ZIP to the repository root; a GitHub Action 
 | `POST /api/catalog/availability` | Batched StockX/GOAT size pricing |
 | `GET /api/watchlist`, `POST`, `DELETE` | Saved products |
 | `GET /api/search`, `/api/suggest`, `/api/product` | Legacy Nike search, typeahead and detail |
-| `GET /api/cron/price-check`, `/api/cron/warm-catalog` | Scheduled jobs (secret required) |
-| `GET /api/admin/providers`, `POST /api/admin/providers/test` | Diagnostics and live connection test (secret required) |
+| `GET /api/cron/price-check`, `/api/cron/warm-catalog`, `/api/cron/ingest-feeds` | Scheduled and manual jobs (secret required) |
+| `GET /api/admin/providers`, `POST /api/admin/providers/test`, `POST /api/admin/providers/feed-preview` | Diagnostics, live connection test and feed preview (secret required) |
 | `POST /api/click` | Anonymous outbound-click counter (always 204) |
 | `GET /api/health` | Sanitized health check |
 | `GET /api/marketplaces` | Retired; returns HTTP 410 |
@@ -182,8 +199,8 @@ app/
   admin/providers/              Owner diagnostics page
   api/
     catalog/                    route.ts (thin), offers/, availability/
-    cron/                       price-check/, warm-catalog/
-    admin/providers/            Diagnostics API; test/ (live connection test)
+    cron/                       price-check/, warm-catalog/, ingest-feeds/
+    admin/providers/            Diagnostics API; test/ (live connection test), feed-preview/
     health/  marketplaces/      Health check; retired endpoint
     click/                      Anonymous outbound click counter
     search/  suggest/  product/ Legacy Nike endpoints
@@ -195,6 +212,9 @@ lib/
   provider-budget.ts            Atomic daily/monthly budgets
   channel3.ts  ebay.ts  impact.ts  Live-offer clients (Channel3, eBay, Impact)
   affiliate-links.ts            Affiliate tracking-link templates
+  size-match.ts  catalog-filters.ts  Size scales, conversion and catalog filtering
+  saved-searches.ts             Browser-only saved searches and price-drop tracking
+  feed-ingest.ts                Optional Impact feed ingestion
   provider-selftest.ts          Live connection test used by the admin page
   provider-health.ts            Telemetry and circuit breaker
   query-normalize.ts            Search shorthand expansion
@@ -202,7 +222,7 @@ lib/
   search-cache.ts  search-match.ts  nike.ts  audience.ts  types.ts  db.ts
 db/
   schema.sql                    Full idempotent schema
-  migrations/                   001-005, additive
+  migrations/                   001-006, additive
 changelog/                      Release notes per version
 docs/                           Upgrading, free-tier operations, roadmap
 .github/workflows/              ZIP validation and apply workflow
@@ -214,7 +234,7 @@ vercel.json                     Cron schedule
 - [Free-tier operations](./docs/free-tier-operations.md): limits, fallbacks, tuning, warm-up, dashboard
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v2.9.0](./changelog/v2.9.0.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v3.2.0](./changelog/v3.2.0.md))
 
 ## Data and license
 
