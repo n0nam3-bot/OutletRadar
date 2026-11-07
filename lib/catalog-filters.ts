@@ -98,12 +98,18 @@ export type SizeEvidence = {
   kind: SizeKind;                 // exact, converted between men's/women's, or assumed (system not stated)
   price?: number; currency?: string; source?: string; retailer?: string;
 };
-export type CatalogFilterEvaluation = { keep: boolean; unknown: string[]; matched: number; size?: SizeEvidence };
+export type CatalogFilterEvaluation = {
+  keep: boolean; unknown: string[]; matched: number;
+  /** Best evidence for the requested size: the cheapest verified ask, else the cheapest listed price. */
+  size?: SizeEvidence;
+  /** Every source that has the requested size (marketplaces and retailers), cheapest first. */
+  sizeOffers?: SizeEvidence[];
+};
 
-function audienceSystem(audience: string): SizeSystem | null {
+export function audienceSystem(audience: string): SizeSystem | null {
   return audience === "men" ? "men" : audience === "women" ? "women" : audience === "kids" ? "youth" : null;
 }
-function quoteSystem(value: string | undefined): SizeSystem | null {
+export function quoteSystem(value: string | undefined): SizeSystem | null {
   return value === "men" || value === "women" || value === "youth" ? value : null;
 }
 function betterEvidence(current: SizeEvidence | undefined, next: SizeEvidence): SizeEvidence {
@@ -120,6 +126,7 @@ export function catalogFilterEvaluation(
   const unknown: string[] = [];
   let matched = 0;
   let size: SizeEvidence | undefined;
+  let sizeOffers: SizeEvidence[] | undefined;
   const audience = catalogAudience(product);
   if (filters.gender !== "all") {
     if (!audience || audience === "unknown") { unknown.push("audience"); return { keep: false, unknown, matched }; }
@@ -145,19 +152,40 @@ export function catalogFilterEvaluation(
     if (query) {
       // Shoe sizes: compare by size system. A women's 10 is not a men's 10; conversion happens only
       // for brands with a published fixed offset (see lib/size-match.ts) and is labelled as converted.
-      let verified: SizeEvidence | undefined;
-      let listed: SizeEvidence | undefined;
+      // Every source that has the size becomes one row, so the shopper sees the best price across
+      // marketplaces (verified asks) and retailers (size listed, stock not confirmed).
+      const rows: SizeEvidence[] = [];
       for (const quote of quotes) {
         const kind = matchSizeLabel(quote.label, query, product.brand, quoteSystem(quote.sizeSystem));
         if (!kind || quote.available === false) continue;
-        const evidence: SizeEvidence = { state: quote.available === true ? "verified" : "listed", label: quote.label, kind, price: quote.price, currency: quote.currency, source: quote.source, retailer: quote.retailer };
-        if (quote.available === true) verified = betterEvidence(verified, evidence); else listed = betterEvidence(listed, evidence);
+        rows.push({ state: quote.available === true ? "verified" : "listed", label: quote.label, kind, price: quote.price, currency: quote.currency, source: quote.source, retailer: quote.retailer });
       }
-      for (const label of listedLabels) {
-        const kind = matchSizeLabel(label, query, product.brand, audienceSystem(audience));
-        if (kind) listed = betterEvidence(listed, { state: "listed", label, kind });
+      for (const listing of product.listings ?? []) {
+        for (const label of listing.sizes ?? []) {
+          const kind = matchSizeLabel(label, query, product.brand, audienceSystem(audience));
+          if (kind) { rows.push({ state: "listed", label, kind, price: listing.price, currency: listing.currency, source: listing.source, retailer: listing.retailer }); break; }
+        }
       }
-      size = verified ?? listed;
+      if (!rows.length) {
+        for (const label of product.sizes ?? []) {
+          const kind = matchSizeLabel(label, query, product.brand, audienceSystem(audience));
+          if (kind) { rows.push({ state: "listed", label, kind }); break; }
+        }
+      }
+      // One row per seller: prefer a verified ask, then an exact scale, then the lower price.
+      const bySeller = new Map<string, SizeEvidence>();
+      for (const row of rows) {
+        const key = `${row.source ?? ""}|${row.retailer ?? ""}`;
+        const current = bySeller.get(key);
+        const better = !current
+          || (row.state === "verified" && current.state !== "verified")
+          || (row.state === current.state && SIZE_KIND_RANK[row.kind] < SIZE_KIND_RANK[current.kind])
+          || (row.state === current.state && row.kind === current.kind && (row.price ?? Infinity) < (current.price ?? Infinity));
+        if (better) bySeller.set(key, row);
+      }
+      sizeOffers = [...bySeller.values()].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity) || Number(b.state === "verified") - Number(a.state === "verified"));
+      const verifiedRows = sizeOffers.filter((row) => row.state === "verified");
+      size = verifiedRows[0] ?? sizeOffers[0];
       if (!size) {
         // No size data at all means "cannot tell"; data that excludes the size (sold out, other sizes) means "no".
         if (!quotes.length && !listedLabels.length) unknown.push("size list");
@@ -185,10 +213,10 @@ export function catalogFilterEvaluation(
     }
   }
 
-  // With a size selected and a verified price for that size, the price filter applies to that size's
-  // price, not to the cheapest listing of any size.
-  const sizePrice = size?.state === "verified" && typeof size.price === "number" ? size.price : undefined;
-  const prices = sizePrice !== undefined ? [sizePrice] : [...new Set([
+  // With a size selected, the price filter applies to the prices of sellers that have that size (any
+  // source), not to the cheapest listing of any size.
+  const sizePrices = (sizeOffers ?? []).flatMap((row) => typeof row.price === "number" ? [row.price] : []);
+  const prices = sizePrices.length ? sizePrices : [...new Set([
     ...(typeof product.price === "number" ? [product.price] : []),
     ...(product.listings ?? []).flatMap((listing) => typeof listing.price === "number" ? [listing.price] : []),
   ])];
@@ -214,5 +242,5 @@ export function catalogFilterEvaluation(
     else return { keep: false, unknown, matched };
   }
 
-  return { keep: true, unknown, matched, size };
+  return { keep: true, unknown, matched, size, sizeOffers };
 }

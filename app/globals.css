@@ -381,3 +381,14 @@
 
 /* v3.2: admin feed preview */
 .admin-link-button{background:none;border:0;padding:0;font:inherit;color:#1f7a3a;text-decoration:underline;cursor:pointer}
+
+/* v3.3: per-seller price rows for the selected size */
+.catalog-size-evidence{padding:8px 10px}
+.catalog-size-head{font:600 10px var(--mono);color:#4a554a;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em}
+.catalog-size-row{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;align-items:baseline;padding:4px 0;border-top:1px dashed #dfe5db}
+.catalog-size-row:first-of-type{border-top:0}
+.catalog-size-row strong{font:700 13px var(--display)}
+.catalog-size-row span{font:10px var(--mono);color:#4a554a}
+.catalog-size-row em{grid-column:2;font:9px var(--mono);font-style:normal;color:#7b8678}
+.catalog-size-row.is-verified em{color:#1f7a3a}
+.catalog-size-row.is-best strong{color:#1f7a3a}

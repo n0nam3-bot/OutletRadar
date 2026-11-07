@@ -12,7 +12,7 @@ Built with Next.js 15, Vercel and Neon Postgres, and designed to keep working on
 
 - **Structured discovery.** Choose an item type, optional brand, audience and release year, and describe the model (at least two characters). Shorthand such as `aj1`, `af1` or `nb 550` is understood.
 - **Local refinements.** Size, color, price range and sale-only filter the results already on screen; they never spend provider credits.
-- **Accurate sizes with prices.** Sizes are matched within a US scale (men's, women's, kids') with a **Size type** control; men's and women's sizes are converted only for brands with a known chart (Nike, Jordan, New Balance, adidas) and labelled as converted. Cards show the verified price for your size from StockX/GOAT/Flight Club, or mark a size as listed but unconfirmed.
+- **Accurate sizes with prices.** Sizes are matched within a US scale decided by the **Gender** control (men's, women's, kids'); men's and women's sizes are converted only for brands with a known chart (Nike, Jordan, New Balance, adidas) and labelled as converted. With a size entered, each card lists the price from every seller that has that size, lowest first: marketplace asks from StockX, GOAT and Flight Club (verified) and retailers whose listing includes the size (stock unconfirmed). Only the selected size is shown.
 - **Saved searches.** Save a search (with its filters and size) in your browser; running it again reports price drops since you last checked. Nothing is stored on the server.
 - **Grouped products.** Listings from different retailers that describe the same model are combined into one card. Conflicting known year, audience or color keeps variants apart.
 - **Exact-product comparison.** **Compare offers** expands a card to show that model's direct retailer listings: seller title, price, size signals and product link. With a Channel3 key it also adds offers from many other stores and brand sites (adidas, New Balance, Puma, Reebok, Vans, Foot Locker and more), with eBay keys it adds new fixed-price eBay listings, and with Impact keys it adds affiliate-linked offers from the brands and stores that approved your account. Similar-but-different models are excluded.
@@ -48,7 +48,7 @@ flowchart TD
 
 **Keeping results fresh.** Incomplete answers are never cached. They go into `catalog_refresh_queue`, and a daily job (`/api/cron/warm-catalog`) completes them, then refreshes popular searches from `lib/warm-seeds.ts`, using at most 40% of the day's budget.
 
-**Sizes.** The size filter compares US sizes within one scale and never guesses: a bare "10" counts as men's only for a men's search, UK/EU labels are ignored, and conversion is limited to Nike, Jordan, New Balance and adidas. A size is *verified* only when StockX, GOAT or Flight Club reports an active ask for it (and then its price is shown and used by the price filter); a retailer-listed size is shown as unconfirmed.
+**Sizes.** The size filter compares US sizes within one scale and never guesses: a bare "10" counts as men's only for a men's search, UK/EU labels are ignored, and conversion is limited to Nike, Jordan, New Balance and adidas. A size is *verified* only when StockX, GOAT or Flight Club reports an active ask for it; a retailer-listed size is shown as unconfirmed. Every seller that has the size gets one price row (lowest first), and the price filter uses those prices.
 
 **Size data** is demand-driven: a size refinement triggers one batched StockX/GOAT lookup (up to 20 products), and Compare offers checks the selected product. Only explicit provider signals are stored as available or unavailable; everything else stays *unverified*.
 
@@ -234,7 +234,7 @@ vercel.json                     Cron schedule
 - [Free-tier operations](./docs/free-tier-operations.md): limits, fallbacks, tuning, warm-up, dashboard
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v3.2.0](./changelog/v3.2.0.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v3.3.0](./changelog/v3.3.0.md))
 
 ## Data and license
 

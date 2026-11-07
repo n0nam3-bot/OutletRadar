@@ -4,6 +4,7 @@ Release notes for each Outlet Radar version, newest first. Upgrade instructions 
 
 | Version | Summary |
 |---|---|
+| [v3.3.0](./v3.3.0.md) | One gender control; best price for your size across all sources; only your size shown |
 | [v3.2.0](./v3.2.0.md) | Optional bulk feed ingestion (Impact); Nike catalog read-back fix |
 | [v3.1.0](./v3.1.0.md) | Saved searches with price-drop tracking (browser-only) |
 | [v3.0.0](./v3.0.0.md) | Accurate size filtering: size scales, conversion, verified per-size prices |

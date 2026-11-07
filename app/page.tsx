@@ -5,8 +5,8 @@ import {
   ArrowRight, Check, ExternalLink, Heart,
   PackageSearch, Search, ShieldCheck, ShoppingBag, SlidersHorizontal, Sparkles, Tag, X,
 } from "lucide-react";
-import { catalogColorsOf, catalogFilterEvaluation } from "@/lib/catalog-filters";
-import type { SizeSystem } from "@/lib/size-match";
+import { audienceSystem, catalogAudience, catalogColorsOf, catalogFilterEvaluation, quoteSystem } from "@/lib/catalog-filters";
+import { matchSizeLabel, parseSizeQuery, type SizeSystem } from "@/lib/size-match";
 import { describeSearch, loadSavedSearches, persistSavedSearches, priceSnapshot, productKey, summarizePriceChanges, upsertSavedSearch, type PriceChangeSummary, type SavedSearch, type SearchCriteria } from "@/lib/saved-searches";
 import type { CatalogBrowseCategory, CatalogBrowseProduct, MarketplaceOffer, MarketplaceSizeQuote, MarketplaceSourceStatus, NikeProduct, ProductSize } from "@/lib/types";
 
@@ -190,8 +190,6 @@ export default function Home() {
   const [catalogGender, setCatalogGender] = useState("all");
   const [catalogReleaseYear, setCatalogReleaseYear] = useState("");
   const [catalogSize, setCatalogSize] = useState("");
-  // Which US size scale the typed size means. "auto" follows the audience filter (women -> women's, kids -> kids', otherwise men's).
-  const [catalogSizeChoice, setCatalogSizeChoice] = useState<"auto" | SizeSystem>("auto");
   const [catalogColor, setCatalogColor] = useState("");
   const [catalogMinPrice, setCatalogMinPrice] = useState("");
   const [catalogMaxPrice, setCatalogMaxPrice] = useState("");
@@ -370,7 +368,9 @@ export default function Home() {
     return [...new Set(labels)].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [availabilityClock, products, saved, sizeDetails, sizeDetailsCheckedAt, tab]);
 
-  const catalogSizeSystem: SizeSystem = catalogSizeChoice === "auto" ? (catalogGender === "women" ? "women" : catalogGender === "kids" ? "youth" : "men") : catalogSizeChoice;
+  // One control decides the size scale: the GENDER dropdown (a marker typed in the size box, such as "W 8" or "5Y", wins).
+  const catalogSizeSystem: SizeSystem = catalogGender === "women" ? "women" : catalogGender === "kids" ? "youth" : "men";
+  const activeSizeQuery = useMemo(() => (catalogSize.trim() ? parseSizeQuery(catalogSize, catalogSizeSystem) : null), [catalogSize, catalogSizeSystem]);
   const catalogFilters = useMemo(() => ({
     gender: catalogGender,
     releaseYear: catalogReleaseYear,
@@ -393,7 +393,23 @@ export default function Home() {
       a.product.title.localeCompare(b.product.title)),
   [catalogProducts, catalogFilters, catalogSizeQuotes]);
   const catalogVisibleProducts = useMemo(() => catalogEvaluated.map(({ product }) => product), [catalogEvaluated]);
-  const catalogSizeEvidence = useMemo(() => new Map(catalogEvaluated.map(({ product, evaluation }) => [product.id, evaluation.size] as const)), [catalogEvaluated]);
+  const catalogSizeInfo = useMemo(() => new Map(catalogEvaluated.map(({ product, evaluation }) => [product.id, evaluation] as const)), [catalogEvaluated]);
+
+  // In Compare offers with a size selected: sellers with a verified ask for that size first (cheapest first),
+  // then sellers that list the size, then the rest.
+  const marketplaceOffersOrdered = useMemo(() => {
+    if (!activeSizeQuery) return marketplaceOffers;
+    const brand = activeCompareProduct?.brand ?? "";
+    const fallback = audienceSystem(activeCompareProduct ? catalogAudience(activeCompareProduct) : "");
+    const rank = (offer: (typeof marketplaceOffers)[number]) => {
+      const quotes = marketplaceSizeQuotes.filter((quote) => quote.source === offer.source && matchSizeLabel(quote.label, activeSizeQuery, brand, quoteSystem(quote.sizeSystem)));
+      const verified = quotes.filter((quote) => quote.available === true && typeof quote.price === "number").map((quote) => quote.price as number);
+      if (verified.length) return { tier: 0, price: Math.min(...verified) };
+      const listed = (offer.sizes ?? []).some((label) => matchSizeLabel(label, activeSizeQuery, brand, fallback)) || quotes.some((quote) => quote.available !== false);
+      return { tier: listed ? 1 : 2, price: offer.price ?? Infinity };
+    };
+    return [...marketplaceOffers].sort((a, b) => { const left = rank(a); const right = rank(b); return left.tier - right.tier || left.price - right.price; });
+  }, [marketplaceOffers, marketplaceSizeQuotes, activeSizeQuery, activeCompareProduct]);
 
   // ---- Saved searches (browser-only) ----
   useEffect(() => { setSavedSearches(loadSavedSearches(typeof window === "undefined" ? null : window.localStorage)); }, []);
@@ -407,7 +423,7 @@ export default function Home() {
   }), [catalogEvaluated]);
 
   function currentCriteria(): SearchCriteria {
-    return { query: query.trim(), type: catalogType, brand: catalogBrand, gender: catalogGender, releaseYear: catalogReleaseYear.trim(), size: catalogSize.trim(), sizeChoice: catalogSizeChoice, color: catalogColor.trim(), minPrice: catalogMinPrice.trim(), maxPrice: catalogMaxPrice.trim(), saleOnly: catalogSaleOnly };
+    return { query: query.trim(), type: catalogType, brand: catalogBrand, gender: catalogGender, releaseYear: catalogReleaseYear.trim(), size: catalogSize.trim(), sizeChoice: "auto" as const, color: catalogColor.trim(), minPrice: catalogMinPrice.trim(), maxPrice: catalogMaxPrice.trim(), saleOnly: catalogSaleOnly };
   }
 
   function saveCurrentSearch() {
@@ -421,8 +437,8 @@ export default function Home() {
 
   function runSavedSearch(saved: SavedSearch) {
     setTab("search");
-    setQuery(saved.query); setCatalogType(saved.type as CatalogBrowseCategory); setCatalogBrand(saved.brand); setCatalogGender(saved.gender);
-    setCatalogReleaseYear(saved.releaseYear); setCatalogSize(saved.size); setCatalogSizeChoice(saved.sizeChoice); setCatalogColor(saved.color);
+    setQuery(saved.query); setCatalogType(saved.type as CatalogBrowseCategory); setCatalogBrand(saved.brand); setCatalogGender(saved.gender === "all" && saved.sizeChoice === "women" ? "women" : saved.gender === "all" && saved.sizeChoice === "youth" ? "kids" : saved.gender === "all" && saved.sizeChoice === "men" ? "men" : saved.gender);
+    setCatalogReleaseYear(saved.releaseYear); setCatalogSize(saved.size); setCatalogColor(saved.color);
     setCatalogMinPrice(saved.minPrice); setCatalogMaxPrice(saved.maxPrice); setCatalogSaleOnly(saved.saleOnly);
     setSavedSearchChanges(null);
     setActiveSavedSearchId(saved.id);
@@ -833,13 +849,12 @@ export default function Home() {
             </div>
             {catalogFiltersOpen && <div className="hunt-advanced-filters">
               <label className="search-filter-field"><span>SIZE (US)</span><input value={catalogSize} onChange={(event) => setCatalogSize(event.target.value)} placeholder="e.g. 10.5, W 8 or 5Y" /></label>
-              <label className="search-filter-field"><span>SIZE TYPE</span><select value={catalogSizeChoice} onChange={(event) => setCatalogSizeChoice(event.target.value as "auto" | SizeSystem)}><option value="auto">Auto ({catalogSizeSystem === "women" ? "women\u2019s" : catalogSizeSystem === "youth" ? "kids\u2019" : "men\u2019s"})</option><option value="men">Men&rsquo;s US</option><option value="women">Women&rsquo;s US</option><option value="youth">Kids&rsquo; (Y)</option></select></label>
-              {catalogSize.trim() && <p className="catalog-size-help">Press <strong>Apply refinements</strong> to check live size prices on StockX and GOAT for the first 20 results. Sizes are compared within the same scale; men&rsquo;s and women&rsquo;s sizes are converted only for Nike, Jordan, New Balance and adidas, and are labelled as converted.</p>}
+              {catalogSize.trim() && <p className="catalog-size-help">{activeSizeQuery ? <>Looking for <strong>{activeSizeQuery.system === "women" ? "women\u2019s" : activeSizeQuery.system === "youth" ? "kids\u2019" : "men\u2019s"} US {activeSizeQuery.value}</strong>{activeSizeQuery.explicit ? " (from the size you typed)" : catalogGender === "all" ? " (GENDER is All, so sizes are read as men\u2019s; pick Women or Kids above, or type W 8 / 5Y)" : " (from GENDER)"}. </> : null}Press <strong>Apply refinements</strong> to check live prices for this size across marketplaces and retailers. Men&rsquo;s and women&rsquo;s sizes are converted only for Nike, Jordan, New Balance and adidas, and are labelled as converted.</p>}
               <label className="search-filter-field"><span>COLOR</span><input value={catalogColor} onChange={(event) => setCatalogColor(event.target.value)} placeholder="e.g. black, red" /></label>
               <label className="search-filter-field"><span>MIN PRICE ($)</span><input type="number" min="0" inputMode="decimal" value={catalogMinPrice} onChange={(event) => setCatalogMinPrice(event.target.value)} placeholder="No min" /></label>
               <label className="search-filter-field"><span>MAX PRICE ($)</span><input type="number" min="0" inputMode="decimal" value={catalogMaxPrice} onChange={(event) => setCatalogMaxPrice(event.target.value)} placeholder="No max" /></label>
               <button type="button" className={`sale-toggle search-sale-toggle ${catalogSaleOnly ? "sale-toggle-active" : ""}`} onClick={() => setCatalogSaleOnly((value) => !value)}><Tag size={15} /> Sale only <span className="toggle-switch"><span /></span></button>
-              <button type="button" className="clear-refinements" onClick={() => { setCatalogSize(""); setCatalogSizeChoice("auto"); setCatalogColor(""); setCatalogMinPrice(""); setCatalogMaxPrice(""); setCatalogSaleOnly(false); }}>Clear refinements</button>
+              <button type="button" className="clear-refinements" onClick={() => { setCatalogSize(""); setCatalogColor(""); setCatalogMinPrice(""); setCatalogMaxPrice(""); setCatalogSaleOnly(false); }}>Clear refinements</button>
               <button type="button" className="apply-refinements" disabled={catalogStatus === "loading"} onClick={() => void browseCatalog()}>{catalogStatus === "loading" ? "Applying…" : "Apply refinements"}</button>
             </div>}
             <p className="hunt-note">Choose an item type, optional brand, audience and release year, then describe the model. Size, color, price and sale refine the results without starting a new provider search.</p>
@@ -876,17 +891,23 @@ export default function Home() {
               <div className="catalog-product-body"><div className="catalog-product-brand">{product.brand} <span>{product.category.toUpperCase()}</span></div><h3>{product.title}</h3>
                 {savedDropByKey.has(productKey(product)) && <div className="catalog-price-drop-badge">↓ {money((savedDropByKey.get(productKey(product))?.from ?? 0) - (savedDropByKey.get(productKey(product))?.to ?? 0))} since you last checked</div>}
                 <div className="catalog-product-facts">{product.gender && product.gender !== "Unknown" ? product.gender : "Audience not listed"}{product.releaseYear ? ` · ${product.releaseYear}` : ""}{catalogColorsOf(product).length ? ` · ${catalogColorsOf(product).slice(0, 2).join(", ")}` : ""}</div>
-                {catalogSize.trim() && (() => {
-                  const evidence = catalogSizeEvidence.get(product.id);
-                  if (!evidence) return null;
-                  const where = evidence.source === "stockx" ? "StockX ask" : evidence.source === "goat" ? "GOAT ask" : evidence.source === "flightclub" ? "Flight Club" : evidence.retailer ?? "retailer";
-                  const scale = catalogSizeSystem === "women" ? "women\u2019s" : catalogSizeSystem === "youth" ? "kids\u2019" : "men\u2019s";
-                  return evidence.state === "verified"
-                    ? <div className="catalog-size-evidence is-verified">Size {catalogSize.trim()} ({scale}): <strong>{typeof evidence.price === "number" ? `from ${money(evidence.price, evidence.currency || "USD")}` : "available"}</strong> · {where}{evidence.kind === "converted" ? ` · listed as ${evidence.label}, converted` : ""}</div>
-                    : <div className="catalog-size-evidence">Size listed ({evidence.label}){evidence.kind === "converted" ? ", converted" : evidence.kind === "assumed" ? ", scale not stated" : ""} · stock and price for this size are not confirmed</div>;
+                {catalogSize.trim() && activeSizeQuery && (() => {
+                  const rows = catalogSizeInfo.get(product.id)?.sizeOffers ?? [];
+                  if (!rows.length) return null;
+                  const seller = (row: (typeof rows)[number]) => row.source === "stockx" ? "StockX" : row.source === "goat" ? "GOAT" : row.source === "flightclub" ? "Flight Club" : row.retailer ?? row.source ?? "Retailer";
+                  const scale = activeSizeQuery.system === "women" ? "women\u2019s" : activeSizeQuery.system === "youth" ? "kids\u2019" : "men\u2019s";
+                  return <div className="catalog-size-evidence">
+                    <div className="catalog-size-head">Size {activeSizeQuery.value} · {scale} US · lowest price first</div>
+                    {rows.slice(0, 5).map((row, index) => <div className={`catalog-size-row ${row.state === "verified" ? "is-verified" : ""} ${index === 0 ? "is-best" : ""}`} key={`${row.source}-${row.retailer}-${index}`}>
+                      <strong>{typeof row.price === "number" ? money(row.price, row.currency || "USD") : "price n/a"}</strong>
+                      <span>{seller(row)}{row.kind === "converted" ? ` · listed as ${row.label}, converted` : row.kind === "assumed" ? " · scale not stated" : ""}</span>
+                      <em>{row.state === "verified" ? "✓ ask for this size" : "size listed · stock unconfirmed"}</em>
+                    </div>)}
+                    {rows.length > 5 && <small>+{rows.length - 5} more seller{rows.length - 5 === 1 ? "" : "s"} in Compare offers</small>}
+                  </div>;
                 })()}
-                {catalogSizeQuotes[product.id]?.some((quote) => quote.available === true) && <div className="catalog-verified-sizes">Size signals: {catalogSizeQuotes[product.id].filter((quote) => quote.available === true).slice(0, 5).map((quote) => `${quote.label} (${quote.source === "stockx" ? "StockX ask" : quote.retailer})`).join(" · ")}</div>}
-                {product.price !== undefined && <div className="catalog-price-row"><strong>{money(product.price, product.currency || "USD")}</strong>{product.originalPrice && product.originalPrice > product.price && <del>{money(product.originalPrice, product.currency || "USD")}</del>}</div>}
+                {!catalogSize.trim() && catalogSizeQuotes[product.id]?.some((quote) => quote.available === true) && <div className="catalog-verified-sizes">Size signals: {catalogSizeQuotes[product.id].filter((quote) => quote.available === true).slice(0, 5).map((quote) => `${quote.label} (${quote.source === "stockx" ? "StockX ask" : quote.retailer})`).join(" · ")}</div>}
+                {product.price !== undefined && !(catalogSize.trim() && activeSizeQuery && (catalogSizeInfo.get(product.id)?.sizeOffers?.length ?? 0) > 0) && <div className="catalog-price-row"><strong>{money(product.price, product.currency || "USD")}</strong>{product.originalPrice && product.originalPrice > product.price && <del>{money(product.originalPrice, product.currency || "USD")}</del>}</div>}
                 {product.styleCode && <small>Style / SKU: {product.styleCode}</small>}<div className="catalog-product-sources">{product.listings.length} retailer listing{product.listings.length === 1 ? "" : "s"} · {product.sources.join(" · ")}</div>
                 <div className="catalog-card-actions"><button type="button" aria-expanded={expanded} aria-controls={`catalog-offers-${product.id}`} onClick={() => void compareCatalogProduct(product)}>{expanded ? "Hide offers" : "Compare offers"} <ArrowRight size={13} /></button>{savedProduct && <button type="button" className={`catalog-save-button ${isSaved ? "catalog-save-active" : ""}`} onClick={() => void toggleSaved(savedProduct)} aria-label={isSaved ? "Remove from watchlist" : "Save to watchlist"}><Heart size={15} fill={isSaved ? "currentColor" : "none"} /></button>}</div>
               </div>
@@ -897,15 +918,26 @@ export default function Home() {
                 {(marketplaceStatus === "loading" || marketplaceSizeStatus === "loading") && <div className="store-results-loading">Checking this product's grouped retailer listings and size feeds…</div>}
                 {marketplaceStatus === "success" && <>
                   <div className="catalog-inline-meta"><strong>{marketplaceOffers.length} matching retailer offer{marketplaceOffers.length === 1 ? "" : "s"}</strong><span>{marketplaceCachedAt ? `Cached ${new Date(marketplaceCachedAt).toLocaleString()}` : "Fresh comparison"}</span></div>
-                  {marketplaceOffers.length > 0 ? <div className="catalog-inline-offers">{marketplaceOffers.map((offer) => {
+                  {marketplaceOffers.length > 0 ? <div className="catalog-inline-offers">{marketplaceOffersOrdered.map((offer) => {
                     const quotes = marketplaceSizeQuotes.filter((quote) => quote.source === offer.source);
                     const quoteLabels = [...new Set(quotes.map((quote) => quote.label))];
                     const listedSizes = offer.sizes ?? [];
+                    const productBrand = activeCompareProduct?.brand ?? offer.brand ?? "";
+                    const fallbackSystem = audienceSystem(activeCompareProduct ? catalogAudience(activeCompareProduct) : "");
+                    // With a size filter, show only that size. Other sizes are not listed.
+                    const sizeQuotesForSelected = activeSizeQuery ? quotes.filter((quote) => matchSizeLabel(quote.label, activeSizeQuery, productBrand, quoteSystem(quote.sizeSystem))) : [];
+                    const listedForSelected = activeSizeQuery ? listedSizes.filter((label) => matchSizeLabel(label, activeSizeQuery, productBrand, fallbackSystem)) : [];
+                    const selectedScale = activeSizeQuery ? (activeSizeQuery.system === "women" ? "women\u2019s" : activeSizeQuery.system === "youth" ? "kids\u2019" : "men\u2019s") : "";
                     return <article className="catalog-inline-offer" key={offer.id}>
                       <div className="catalog-inline-offer-top"><strong>{offer.retailer}</strong><span>ONLINE LISTING</span></div>
                       <h4>{offer.title}</h4>
                       {offer.price !== undefined && <div className="catalog-inline-price">{money(offer.price, offer.currency)} <small>{offer.priceLabel ?? "Displayed price"}</small></div>}
-                      {quoteLabels.length > 0 ? <div className="catalog-inline-sizes"><b>Marketplace size signals</b><div>{quotes.slice(0, 18).map((quote, index) => <span className={quote.available === true ? "is-available" : quote.available === false ? "is-unavailable" : "is-unknown"} key={`${quote.label}-${index}`}>{quote.label} · {quote.available === true ? "signal" : quote.available === false ? "no ask" : "unverified"}{quote.price !== undefined ? ` · ${money(quote.price, quote.currency)}` : ""}</span>)}</div></div> : listedSizes.length > 0 ? <div className="catalog-inline-sizes"><b>Sizes listed by seller (stock not confirmed)</b><div>{listedSizes.slice(0, 18).map((size) => <span className="is-unknown" key={size}>{size}</span>)}</div></div> : <p className="catalog-inline-no-sizes">This source did not provide size-level data.</p>}
+                      {activeSizeQuery ? <div className="catalog-inline-sizes"><b>Size {activeSizeQuery.value} ({selectedScale} US)</b><div>{
+                        sizeQuotesForSelected.length > 0 ? sizeQuotesForSelected.map((quote, index) => <span className={quote.available === true ? "is-available" : quote.available === false ? "is-unavailable" : "is-unknown"} key={`${quote.label}-${index}`}>{quote.label} · {quote.available === true ? "ask available" : quote.available === false ? "no ask" : "unverified"}{quote.price !== undefined ? ` · ${money(quote.price, quote.currency)}` : ""}</span>)
+                        : listedForSelected.length > 0 ? <span className="is-unknown">{listedForSelected[0]} · listed by seller, stock not confirmed</span>
+                        : <span className="is-unavailable">{quoteLabels.length > 0 || listedSizes.length > 0 ? "Not listed by this seller" : "This source did not provide size-level data"}</span>
+                      }</div></div>
+                      : quoteLabels.length > 0 ? <div className="catalog-inline-sizes"><b>Marketplace size signals</b><div>{quotes.slice(0, 18).map((quote, index) => <span className={quote.available === true ? "is-available" : quote.available === false ? "is-unavailable" : "is-unknown"} key={`${quote.label}-${index}`}>{quote.label} · {quote.available === true ? "signal" : quote.available === false ? "no ask" : "unverified"}{quote.price !== undefined ? ` · ${money(quote.price, quote.currency)}` : ""}</span>)}</div></div> : listedSizes.length > 0 ? <div className="catalog-inline-sizes"><b>Sizes listed by seller (stock not confirmed)</b><div>{listedSizes.slice(0, 18).map((size) => <span className="is-unknown" key={size}>{size}</span>)}</div></div> : <p className="catalog-inline-no-sizes">This source did not provide size-level data.</p>}
                       <p className="catalog-inline-stock">{offer.availabilityLabel}</p>
                       <a className="catalog-inline-link" href={offer.url} target="_blank" rel="noreferrer" onClick={() => trackOfferClick(offer)}>Open this exact listing <ExternalLink size={12} /></a>
                       {offer.affiliate && <small className="catalog-affiliate-note">Affiliate link: Outlet Radar may earn a commission at no cost to you.</small>}
