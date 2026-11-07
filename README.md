@@ -46,6 +46,8 @@ flowchart TD
 
 **Cost control.** Browsing always queries StockX and GOAT (0.7 PCKT credits); Flight Club and Kicks Crew (1.5) run only while at least half of the day's allowance remains. Gender, size, color, price and sale are applied locally. Comparing a product reuses the retailer URLs already grouped with it and runs no broad search; the only live calls are one optional search each to Channel3, eBay and Impact, each cached for 3 hours and never saved to the catalog (both providers ask that offer data not be kept longer).
 
+**Many visitors.** Complete search answers are cached at the CDN for 10 minutes, so identical searches never reach the server. The browser anonymously reports each search (filters and lowercase words only) and the daily warm-up refreshes the most-searched filters first. See [docs/scaling.md](./docs/scaling.md).
+
 **Keeping results fresh.** Incomplete answers are never cached. They go into `catalog_refresh_queue`, and a daily job (`/api/cron/warm-catalog`) completes them, then refreshes popular searches from `lib/warm-seeds.ts`, using at most 40% of the day's budget.
 
 **Sizes.** The size filter compares US sizes within one scale and never guesses: a bare "10" counts as men's only for a men's search, UK/EU labels are ignored, and conversion is limited to Nike, Jordan, New Balance and adidas. A size is *verified* only when StockX, GOAT or Flight Club reports an active ask for it; a retailer-listed size is shown as unconfirmed. Every seller that has the size gets one price row (lowest first), and the price filter uses those prices.
@@ -114,6 +116,7 @@ Without `DATABASE_URL` the catalog returns an error: Neon is required.
 | `EBAY_CAMPAIGN_ID` | Optional | eBay Partner Network campaign id for affiliate links |
 | `IMPACT_ACCOUNT_SID`, `IMPACT_AUTH_TOKEN` | Optional | Impact partner offers in Compare |
 | `IMPACT_DAILY_BUDGET`, `IMPACT_MONTHLY_BUDGET` | Optional | Default 500 and 15000 calls |
+| `CATALOG_CDN_SECONDS`, `WARM_MIN_SEARCHES` | Optional | CDN lifetime of complete search answers (default 600, 0 = off); searches needed in 7 days before the warm-up refreshes them (default 2) |
 | `FEED_INGEST_ENABLED`, `IMPACT_FEED_CATALOG_IDS` | Optional | Turn on bulk Impact feed ingestion and choose the catalogs; see [Bulk feed ingestion](#bulk-feed-ingestion) |
 | `FEED_PAGES_PER_RUN`, `FEED_MAX_DB_MB`, `FEED_ITEM_REGEX` | Optional | Pages per run (default 2), database size limit (default 350 MB), which items to keep (default footwear) |
 | `AFFILIATE_LINK_TEMPLATES` | Optional | JSON map of store host to your affiliate tracking-link template; see [Affiliate links](#affiliate-links) |
@@ -183,7 +186,7 @@ Releases are applied by uploading a ZIP to the repository root; a GitHub Action 
 | `GET /api/search`, `/api/suggest`, `/api/product` | Legacy Nike search, typeahead and detail |
 | `GET /api/cron/price-check`, `/api/cron/warm-catalog`, `/api/cron/ingest-feeds` | Scheduled and manual jobs (secret required) |
 | `GET /api/admin/providers`, `POST /api/admin/providers/test`, `POST /api/admin/providers/feed-preview` | Diagnostics, live connection test and feed preview (secret required) |
-| `POST /api/click` | Anonymous outbound-click counter (always 204) |
+| `POST /api/click`, `POST /api/search-log` | Anonymous outbound-click and search counters (always 204) |
 | `GET /api/health` | Sanitized health check |
 | `GET /api/marketplaces` | Retired; returns HTTP 410 |
 
@@ -202,7 +205,7 @@ app/
     cron/                       price-check/, warm-catalog/, ingest-feeds/
     admin/providers/            Diagnostics API; test/ (live connection test), feed-preview/
     health/  marketplaces/      Health check; retired endpoint
-    click/                      Anonymous outbound click counter
+    click/  search-log/         Anonymous outbound click and search counters
     search/  suggest/  product/ Legacy Nike endpoints
     watchlist/                  Saved products
 lib/
@@ -214,6 +217,7 @@ lib/
   affiliate-links.ts            Affiliate tracking-link templates
   size-match.ts  catalog-filters.ts  Size scales, conversion and catalog filtering
   saved-searches.ts             Browser-only saved searches and price-drop tracking
+  search-demand.ts              Anonymous search counts that drive the warm-up
   feed-ingest.ts                Optional Impact feed ingestion
   provider-selftest.ts          Live connection test used by the admin page
   provider-health.ts            Telemetry and circuit breaker
@@ -222,9 +226,9 @@ lib/
   search-cache.ts  search-match.ts  nike.ts  audience.ts  types.ts  db.ts
 db/
   schema.sql                    Full idempotent schema
-  migrations/                   001-006, additive
+  migrations/                   001-007, additive
 changelog/                      Release notes per version
-docs/                           Upgrading, free-tier operations, roadmap
+docs/                           Upgrading, free-tier operations, scaling, roadmap
 .github/workflows/              ZIP validation and apply workflow
 vercel.json                     Cron schedule
 ```
@@ -232,9 +236,10 @@ vercel.json                     Cron schedule
 ## Docs and changelog
 
 - [Free-tier operations](./docs/free-tier-operations.md): limits, fallbacks, tuning, warm-up, dashboard
+- [Serving many visitors](./docs/scaling.md): edge caching, demand-driven refresh and what cannot be free
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v3.3.0](./changelog/v3.3.0.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v3.4.0](./changelog/v3.4.0.md))
 
 ## Data and license
 

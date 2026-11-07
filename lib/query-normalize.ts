@@ -24,3 +24,9 @@ export function canonicalQuery(raw: string): string {
   for (const [pattern, replacement] of ALIASES) value = value.replace(pattern, replacement);
   return value.replace(/\s+/g, " ").trim().slice(0, 100);
 }
+
+/** Query as sent to /api/catalog: shorthand expanded and lowercased, so "AJ1", "aj 1" and "Air Jordan 1"
+ * produce one URL and the CDN can serve them all from one cached response. */
+export function urlQuery(raw: string): string {
+  return canonicalQuery(raw).toLowerCase();
+}

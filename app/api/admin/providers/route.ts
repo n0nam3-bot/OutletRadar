@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { PROVIDER_BUDGETS } from "@/lib/provider-budget";
 import { getCatalogQueueStats } from "@/lib/catalog-queue";
 import { feedCatalogIds, feedEnabled } from "@/lib/feed-ingest";
+import { demandTableAvailable, emptySearches, topSearches } from "@/lib/search-demand";
 import { summarizeCoverage, type RetailerCoverageRow } from "@/lib/retailer-targets";
 
 export const runtime = "nodejs";
@@ -96,12 +97,14 @@ export async function GET(request: NextRequest) {
         lastRunAt: row.last_run_at ? new Date(String(row.last_run_at)).toISOString() : null, lastError: row.last_error ? String(row.last_error) : null,
       })) };
     } catch { /* migration 006 not applied */ }
+    const demandState = await demandTableAvailable();
+    const demand = { ...demandState, top: demandState.available ? await topSearches(12) : [], empty: demandState.available ? await emptySearches(12) : [] };
     const usage = new Map(usageRows.map((row) => [row.provider, Number(row.units_reserved)]));
     const dailyUsage = new Map(dailyRows.map((row) => [row.provider, Number(row.units_reserved)]));
     const counts = catalogRows[0] || { canonical_products: 0, retailer_offers: 0, size_variants: 0 };
     return NextResponse.json({
       service: "outlet-radar",
-      version: "3.3.0",
+      version: "3.4.0",
       checkedAt: new Date().toISOString(),
       budgets: (Object.keys(PROVIDER_BUDGETS) as Array<keyof typeof PROVIDER_BUDGETS>).map((provider) => {
         const monthlyLimit = PROVIDER_BUDGETS[provider].monthly;
@@ -119,6 +122,7 @@ export async function GET(request: NextRequest) {
       retailerCoverage: summarizeCoverage(coverageRows),
       clicks,
       feedIngest,
+      demand,
       catalog: {
         canonicalProducts: counts.canonical_products,
         retailerOffers: counts.retailer_offers,

@@ -20,6 +20,7 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 | Version | Migration to run | Required? |
 |---|---|---|
 | v3.2.0 | `006_feed_ingest_state.sql` | Only needed for bulk feed ingestion (off by default). |
+| v3.4.0 | `007_search_demand_daily.sql` | Recommended. Without it searches work and demand is simply not recorded. |
 | v3.3.0, v3.1.0, v3.0.0 | None | No database change. |
 | v2.9.0 | None | No database change. |
 | v2.8.0 | `005_offer_click_daily.sql` | Recommended. Without it clicks are not recorded and the dashboard says so. |
@@ -33,6 +34,13 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 | v1.7 | `001_multi_retailer.sql` | Required. Retailer search cache and monthly usage. |
 
 For a brand-new database, run the whole of `db/schema.sql` instead of the individual migrations. It is idempotent and always reflects the current schema.
+
+## Upgrading from v3.3.0 to v3.4.0
+
+1. Run `db/migrations/007_search_demand_daily.sql` in Neon.
+2. Upload the v3.4 ZIP and wait for the deployment.
+3. Verify edge caching: open the site, run a search, then run the same search again with the browser's developer tools open (Network tab). The second `/api/catalog` response should show `x-vercel-cache: HIT`.
+4. After a day of traffic, open `/admin/providers` → **Search demand**.
 
 ## Upgrading from v3.2.0 to v3.3.0
 

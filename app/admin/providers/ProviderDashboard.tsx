@@ -28,6 +28,7 @@ type Diagnostics = {
   checkedAt: string;
   budgets: Budget[];
   providers: Provider[];
+  demand?: { available: boolean; searches7d: number; top: Array<{ query: string; category: string; brand: string; gender: string; releaseYear: number; searches: number; emptyResults: number }>; empty: Array<{ query: string; category: string; brand: string; gender: string; releaseYear: number; searches: number; emptyResults: number }> };
   feedIngest?: { enabled: boolean; configuredCatalogs: number; tableAvailable: boolean; impactOffers: number; rows: Array<{ catalogId: string; name: string; nextPage: number; numPages: number | null; itemsSeen: number; productsSaved: number; cycles: number; lastRunAt: string | null; lastError: string | null }> };
   clicks?: { available: boolean; byStore: Array<{ retailer: string; source: string; clicks: number }>; byProduct: Array<{ title: string; clicks: number }>; total: number };
   retailerCoverage?: { targets: Array<{ name: string; via: string; seen: boolean; offers: number; products: number; lastSeenAt: string | null; sellerNames: string[] }>; other: Array<{ retailer: string; source: string; offers: number }> };
@@ -210,6 +211,13 @@ export default function ProviderAdminPage() {
                 <span>{target.providers.length ? `via ${target.providers.join(", ")}` : "not returned by any provider for this search"}</span>
               </div>)}
             </div>
+          </>}
+          {data.demand && <>
+            <div className="admin-section-heading"><h2>Search demand</h2><span>Last 7 days · anonymous counts{data.demand.available ? ` · ${data.demand.searches7d.toLocaleString()} searches` : ""}</span></div>
+            {data.demand.available ? (data.demand.top.length ? <>
+              <div className="admin-coverage-list">{data.demand.top.map((row) => <div className="admin-coverage-row is-seen" key={`${row.query}-${row.category}-${row.brand}-${row.gender}-${row.releaseYear}`}><strong>{row.query}</strong><span>{row.searches.toLocaleString()} search{row.searches === 1 ? "" : "es"} · {row.brand === "all" ? "all brands" : row.brand} · {row.category}{row.gender !== "all" ? ` · ${row.gender}` : ""}{row.releaseYear ? ` · ${row.releaseYear}` : ""}{row.emptyResults ? ` · ${row.emptyResults} found nothing` : ""}</span></div>)}</div>
+              {data.demand.empty.length > 0 && <p className="admin-coverage-other">Searches that found nothing (what to load next): {data.demand.empty.map((row) => `${row.query} (${row.emptyResults})`).join(", ")}</p>}
+            </> : <p className="admin-coverage-other">No searches recorded yet.</p>) : <p className="admin-coverage-other">Apply migration 007 to record anonymous search demand.</p>}
           </>}
           {data.feedIngest && <>
             <div className="admin-section-heading"><h2>Bulk feed ingestion</h2><span>{data.feedIngest.enabled ? "On" : "Off"} · {data.feedIngest.configuredCatalogs} catalog(s) selected · {data.feedIngest.impactOffers.toLocaleString()} stored Impact offers</span></div>

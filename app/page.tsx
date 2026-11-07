@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { audienceSystem, catalogAudience, catalogColorsOf, catalogFilterEvaluation, quoteSystem } from "@/lib/catalog-filters";
 import { matchSizeLabel, parseSizeQuery, type SizeSystem } from "@/lib/size-match";
+import { urlQuery } from "@/lib/query-normalize";
 import { describeSearch, loadSavedSearches, persistSavedSearches, priceSnapshot, productKey, summarizePriceChanges, upsertSavedSearch, type PriceChangeSummary, type SavedSearch, type SearchCriteria } from "@/lib/saved-searches";
 import type { CatalogBrowseCategory, CatalogBrowseProduct, MarketplaceOffer, MarketplaceSizeQuote, MarketplaceSourceStatus, NikeProduct, ProductSize } from "@/lib/types";
 
@@ -549,7 +550,7 @@ export default function Home() {
     setCatalogSizeQuoteSources([]);
     try {
       const params = new URLSearchParams({ category: catalogType, brand: catalogBrand, gender: catalogGender });
-      if (query.trim()) params.set("q", query.trim());
+      if (query.trim()) params.set("q", urlQuery(query));
       if (catalogReleaseYear.trim()) params.set("releaseYear", catalogReleaseYear.trim());
       const response = await fetch(`/api/catalog?${params.toString()}`);
       const data = await response.json();
@@ -560,6 +561,14 @@ export default function Home() {
       setCatalogCachedAt(data.cachedAt ? String(data.cachedAt) : null);
       setCatalogNotice(typeof data.notice === "string" && data.notice ? data.notice : null);
       setCatalogStatus("success");
+      // Count this search for the owner's anonymous demand report. The search itself may have been answered by
+      // the CDN, so the browser reports it; filters and lowercase search words only.
+      try {
+        const body = JSON.stringify({ q: urlQuery(query), category: catalogType, brand: catalogBrand, gender: catalogGender, releaseYear: catalogReleaseYear.trim(), results: discovered.length });
+        if (!(typeof navigator.sendBeacon === "function" && navigator.sendBeacon("/api/search-log", new Blob([body], { type: "application/json" })))) {
+          void fetch("/api/search-log", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: true }).catch(() => undefined);
+        }
+      } catch { /* demand counting is best-effort */ }
 
       // A selected shoe size triggers one batched StockX and/or GOAT size-price
       // lookup (up to 20 product IDs per source), not one request per product.

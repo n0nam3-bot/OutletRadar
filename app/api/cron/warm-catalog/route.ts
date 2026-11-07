@@ -4,6 +4,7 @@ import { getDb } from "@/lib/db";
 import { catalogCacheKey, discoverCatalog } from "@/lib/catalog-discovery";
 import { claimCatalogRefreshes, completeCatalogRefresh, pruneCatalogRefreshQueue } from "@/lib/catalog-queue";
 import { canonicalQuery } from "@/lib/query-normalize";
+import { pruneSearchDemand, topSearches } from "@/lib/search-demand";
 import { WARM_SEEDS } from "@/lib/warm-seeds";
 import { feedEnabled, runFeedIngest } from "@/lib/feed-ingest";
 
@@ -24,7 +25,8 @@ function authorized(request: NextRequest): boolean {
   return timingSafeEqual(a, b);
 }
 
-type Job = { cacheKey: string; category: string; brand: string; gender: string; releaseYear: number | null; query: string; fromQueue: boolean };
+type JobOrigin = "queue" | "demand" | "seed";
+type Job = { cacheKey: string; category: string; brand: string; gender: string; releaseYear: number | null; query: string; fromQueue: boolean; origin: JobOrigin };
 
 /** Seeds whose exact-query cache entry is missing or expired, oldest first. */
 async function dueSeeds(limit: number): Promise<Job[]> {
@@ -45,8 +47,29 @@ async function dueSeeds(limit: number): Promise<Job[]> {
     .slice(0, limit)
     .map((candidate) => ({
       cacheKey: candidate.cacheKey, category: candidate.seed.category, brand: candidate.seed.brand,
-      gender: "all", releaseYear: null, query: candidate.query, fromQueue: false,
+      gender: "all", releaseYear: null, query: candidate.query, fromQueue: false, origin: "seed" as const,
     }));
+}
+
+/** The most-searched filters of the last 7 days whose cached answer is missing or expired. Credits go to
+ * what visitors actually look for before the static seed list. */
+async function hotSearches(limit: number): Promise<Job[]> {
+  const sql = getDb();
+  if (!sql || limit <= 0) return [];
+  const minimum = Number(process.env.WARM_MIN_SEARCHES ?? 2);
+  const demand = await topSearches(60, Number.isFinite(minimum) ? Math.max(1, minimum) : 2);
+  if (!demand.length) return [];
+  const candidates = demand.map((row) => ({ row, cacheKey: catalogCacheKey(row.category, row.brand, row.gender, row.releaseYear || undefined, row.query) }));
+  const fresh = await sql`
+    SELECT cache_key FROM retailer_search_cache
+    WHERE cache_key IN (SELECT jsonb_array_elements_text(${JSON.stringify(candidates.map((candidate) => candidate.cacheKey))}::jsonb))
+      AND expires_at > NOW()
+  ` as Array<{ cache_key: string }>;
+  const freshKeys = new Set(fresh.map((row) => row.cache_key));
+  return candidates.filter((candidate) => !freshKeys.has(candidate.cacheKey)).slice(0, limit).map((candidate) => ({
+    cacheKey: candidate.cacheKey, category: candidate.row.category, brand: candidate.row.brand, gender: candidate.row.gender,
+    releaseYear: candidate.row.releaseYear || null, query: candidate.row.query, fromQueue: false, origin: "demand" as const,
+  }));
 }
 
 /**
@@ -70,13 +93,15 @@ export async function GET(request: NextRequest) {
   await pruneCatalogRefreshQueue();
   const jobs: Job[] = (await claimCatalogRefreshes(maxSearches)).map((row) => ({
     cacheKey: row.cacheKey, category: row.category, brand: row.brand, gender: row.gender,
-    releaseYear: row.releaseYear, query: row.query, fromQueue: true,
+    releaseYear: row.releaseYear, query: row.query, fromQueue: true, origin: "queue" as const,
   }));
+  if (jobs.length < maxSearches) jobs.push(...await hotSearches(maxSearches - jobs.length));
   if (jobs.length < maxSearches) jobs.push(...await dueSeeds(maxSearches - jobs.length));
+  await pruneSearchDemand();
 
-  const results: Array<{ query: string; brand: string; source: "queue" | "seed"; outcome: string; products?: number }> = [];
+  const results: Array<{ query: string; brand: string; source: JobOrigin; outcome: string; products?: number }> = [];
   for (const job of jobs) {
-    if (Date.now() - started > TIME_BUDGET_MS) { results.push({ query: job.query, brand: job.brand, source: job.fromQueue ? "queue" : "seed", outcome: "deferred_time_limit" }); continue; }
+    if (Date.now() - started > TIME_BUDGET_MS) { results.push({ query: job.query, brand: job.brand, source: job.origin, outcome: "deferred_time_limit" }); continue; }
     const params = new URLSearchParams({ category: job.category, brand: job.brand, gender: job.gender, q: job.query });
     if (job.releaseYear) params.set("releaseYear", String(job.releaseYear));
     try {
@@ -84,9 +109,9 @@ export async function GET(request: NextRequest) {
       const products = Array.isArray(body.products) ? body.products.length : 0;
       const complete = status === 200 && body.complete === true;
       if (complete && job.fromQueue) await completeCatalogRefresh(job.cacheKey);
-      results.push({ query: job.query, brand: job.brand, source: job.fromQueue ? "queue" : "seed", outcome: complete ? "refreshed" : status === 200 ? "incomplete_budget_or_provider" : `http_${status}`, products });
+      results.push({ query: job.query, brand: job.brand, source: job.origin, outcome: complete ? "refreshed" : status === 200 ? "incomplete_budget_or_provider" : `http_${status}`, products });
     } catch (error) {
-      results.push({ query: job.query, brand: job.brand, source: job.fromQueue ? "queue" : "seed", outcome: `error: ${error instanceof Error ? error.message.slice(0, 120) : "unknown"}` });
+      results.push({ query: job.query, brand: job.brand, source: job.origin, outcome: `error: ${error instanceof Error ? error.message.slice(0, 120) : "unknown"}` });
     }
   }
 
