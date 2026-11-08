@@ -4,6 +4,7 @@ Release notes for each Outlet Radar version, newest first. Upgrade instructions 
 
 | Version | Summary |
 |---|---|
+| [v3.7.0](./v3.7.0.md) | `npm test`: the automated test suite ships with the repo |
 | [v3.6.0](./v3.6.0.md) | Per-connection fresh-lookup limit (protects the shared allowance) |
 | [v3.5.0](./v3.5.0.md) | Privacy page, affiliate disclosure, robots/sitemap, security headers |
 | [v3.4.0](./v3.4.0.md) | Edge caching, anonymous search demand, demand-driven refresh |

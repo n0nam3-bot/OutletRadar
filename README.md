@@ -105,6 +105,13 @@ npm run dev                  # http://localhost:3000
 ```
 Without `DATABASE_URL` the catalog returns an error: Neon is required.
 
+### Tests
+```bash
+npm install
+npm test        # about 230 checks, no accounts or network needed
+```
+The tests run the real application code against an in-memory PostgreSQL with simulated providers. See [`tests/README.md`](./tests/README.md).
+
 ## Environment variables
 
 | Variable | Required | Purpose |
@@ -232,6 +239,7 @@ lib/
   site-info.ts                  Operator, contact and site address for the legal pages
   warm-seeds.ts                 Popular searches kept warm
   search-cache.ts  search-match.ts  nike.ts  audience.ts  types.ts  db.ts
+tests/                          Automated tests (npm test)
 db/
   schema.sql                    Full idempotent schema
   migrations/                   001-007, additive
@@ -247,7 +255,7 @@ vercel.json                     Cron schedule
 - [Serving many visitors](./docs/scaling.md): edge caching, demand-driven refresh and what cannot be free
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v3.6.0](./changelog/v3.6.0.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v3.7.0](./changelog/v3.7.0.md))
 
 ## Privacy and disclosure
 
