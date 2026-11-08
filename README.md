@@ -48,6 +48,8 @@ flowchart TD
 
 **Many visitors.** Complete search answers are cached at the CDN for 10 minutes, so identical searches never reach the server. The browser anonymously reports each search (filters and lowercase words only) and the daily warm-up refreshes the most-searched filters first. See [docs/scaling.md](./docs/scaling.md).
 
+**Protecting the shared allowance.** A connection that triggers more than `LIVE_LOOKUPS_PER_HOUR` fresh provider lookups in an hour is still answered, from saved results, so one runaway visitor cannot use up everyone's daily credits. The counts live only in server memory.
+
 **Keeping results fresh.** Incomplete answers are never cached. They go into `catalog_refresh_queue`, and a daily job (`/api/cron/warm-catalog`) completes them, then refreshes popular searches from `lib/warm-seeds.ts`, using at most 40% of the day's budget.
 
 **Sizes.** The size filter compares US sizes within one scale and never guesses: a bare "10" counts as men's only for a men's search, UK/EU labels are ignored, and conversion is limited to Nike, Jordan, New Balance and adidas. A size is *verified* only when StockX, GOAT or Flight Club reports an active ask for it; a retailer-listed size is shown as unconfirmed. Every seller that has the size gets one price row (lowest first), and the price filter uses those prices.
@@ -116,6 +118,7 @@ Without `DATABASE_URL` the catalog returns an error: Neon is required.
 | `EBAY_CAMPAIGN_ID` | Optional | eBay Partner Network campaign id for affiliate links |
 | `IMPACT_ACCOUNT_SID`, `IMPACT_AUTH_TOKEN` | Optional | Impact partner offers in Compare |
 | `IMPACT_DAILY_BUDGET`, `IMPACT_MONTHLY_BUDGET` | Optional | Default 500 and 15000 calls |
+| `LIVE_LOOKUPS_PER_HOUR` | Optional | Fresh provider lookups one connection may trigger per hour (default 15, 0 = off); past it the search is still answered from saved results |
 | `SITE_OPERATOR`, `CONTACT_EMAIL`, `SITE_URL` | Optional | Your name, contact address and public address, shown on the privacy and disclosure pages and used for `sitemap.xml` |
 | `CATALOG_CDN_SECONDS`, `WARM_MIN_SEARCHES` | Optional | CDN lifetime of complete search answers (default 600, 0 = off); searches needed in 7 days before the warm-up refreshes them (default 2) |
 | `FEED_INGEST_ENABLED`, `IMPACT_FEED_CATALOG_IDS` | Optional | Turn on bulk Impact feed ingestion and choose the catalogs; see [Bulk feed ingestion](#bulk-feed-ingestion) |
@@ -225,6 +228,7 @@ lib/
   provider-selftest.ts          Live connection test used by the admin page
   provider-health.ts            Telemetry and circuit breaker
   query-normalize.ts            Search shorthand expansion
+  live-limit.ts                 Per-connection fresh-lookup limit (in memory)
   site-info.ts                  Operator, contact and site address for the legal pages
   warm-seeds.ts                 Popular searches kept warm
   search-cache.ts  search-match.ts  nike.ts  audience.ts  types.ts  db.ts
@@ -243,7 +247,7 @@ vercel.json                     Cron schedule
 - [Serving many visitors](./docs/scaling.md): edge caching, demand-driven refresh and what cannot be free
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v3.5.0](./changelog/v3.5.0.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v3.6.0](./changelog/v3.6.0.md))
 
 ## Privacy and disclosure
 

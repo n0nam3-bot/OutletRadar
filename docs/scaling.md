@@ -18,6 +18,10 @@ Visitor traffic should never be what spends the scarce resources. Reads (search 
 
 The daily warm-up (and `GET /api/cron/ingest-feeds` if you schedule it) spends at most `WARM_DAILY_SHARE` of each provider's daily budget, in this order: queued partial searches, the most-searched filters of the last 7 days, then the static seed list. Anonymous demand counts (`/admin/providers` → Search demand) decide the order. Searches that found nothing are listed so you know what to load next.
 
+## Protecting the shared allowance
+
+A connection that triggers more than `LIVE_LOOKUPS_PER_HOUR` fresh provider lookups in an hour (default 15) is still answered, from saved results, with a notice, and the search is queued for the warm-up. Searches served by the CDN, a cache or the saved catalog never count. The counts are in server memory only and each server instance counts separately, so this is a best-effort guard: for real abuse, also enable Vercel's firewall and rate limiting.
+
 ## Limits to know
 
 | Resource | Free-tier limit | Effect at scale |

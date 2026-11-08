@@ -20,7 +20,7 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 | Version | Migration to run | Required? |
 |---|---|---|
 | v3.2.0 | `006_feed_ingest_state.sql` | Only needed for bulk feed ingestion (off by default). |
-| v3.5.0 | None | No database change. |
+| v3.6.0, v3.5.0 | None | No database change. |
 | v3.4.0 | `007_search_demand_daily.sql` | Recommended. Without it searches work and demand is simply not recorded. |
 | v3.3.0, v3.1.0, v3.0.0 | None | No database change. |
 | v2.9.0 | None | No database change. |
@@ -35,6 +35,10 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 | v1.7 | `001_multi_retailer.sql` | Required. Retailer search cache and monthly usage. |
 
 For a brand-new database, run the whole of `db/schema.sql` instead of the individual migrations. It is idempotent and always reflects the current schema.
+
+## Upgrading from v3.5.0 to v3.6.0
+
+No migration needed. Upload the v3.6 ZIP. Optionally set `LIVE_LOOKUPS_PER_HOUR` (default 15, 0 turns it off). Also consider enabling rate limiting and attack protection in the Vercel dashboard (Firewall) for real abuse; the in-app limit is best-effort.
 
 ## Upgrading from v3.4.0 to v3.5.0
 

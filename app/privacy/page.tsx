@@ -23,6 +23,9 @@ export default function PrivacyPage() {
       <h2>Anonymous counts</h2>
       <p>So we can keep popular searches up to date, your browser reports each search and each click on a store link as an anonymous daily count: the lowercase search words and filters, or the store, product title and link domain. These counts contain no IP address, cookie, browser details or account, and cannot be tied to you. Search counts are deleted after 60 days.</p>
 
+      <h2>Protecting the shared allowance</h2>
+      <p>Fresh product lookups use a small shared daily allowance. To stop one connection using it all, the server briefly counts fresh lookups per connection address in its memory for up to an hour. This count is never saved or logged. Over the limit you still get results, from saved data.</p>
+
       <h2>Saved searches</h2>
       <p>Saved searches (and the prices they remember) are stored only in your own browser. They are never sent to our server. Clearing this site&rsquo;s data in your browser removes them.</p>
 

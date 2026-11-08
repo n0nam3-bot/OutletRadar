@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { discoverCatalog } from "@/lib/catalog-discovery";
+import { allowLiveLookup, clientKeyFromHeaders } from "@/lib/live-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -17,7 +18,10 @@ function cdnSeconds(): number {
 // data was shown) are cached for seconds only, so they are replaced as soon as fresh data exists.
 // The full URL (including every filter) is the cache key. CATALOG_CDN_SECONDS=0 turns this off.
 export async function GET(request: NextRequest) {
-  const { status, body } = await discoverCatalog(request.nextUrl.searchParams, { mode: "user" });
+  // One connection cannot use up the shared daily provider allowance: past LIVE_LOOKUPS_PER_HOUR fresh lookups
+  // an hour it is still answered, from saved results (see lib/live-limit.ts).
+  const clientKey = clientKeyFromHeaders((name) => request.headers.get(name));
+  const { status, body } = await discoverCatalog(request.nextUrl.searchParams, { mode: "user", liveLookup: () => allowLiveLookup(clientKey) });
   const ttl = cdnSeconds();
   const headers: Record<string, string> = {};
   if (status === 200 && ttl > 0) {

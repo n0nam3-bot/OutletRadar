@@ -907,14 +907,16 @@ function namesWithStatus(sources: Array<MarketplaceSourceStatus>, status: string
   return { text, plural: names.length > 1 };
 }
 
-function incompleteNotice(sources: MarketplaceSourceStatus[], flags: { productCount: number; approximate: boolean; savedSearch: boolean; queued: boolean }): string {
+function incompleteNotice(sources: MarketplaceSourceStatus[], flags: { productCount: number; approximate: boolean; savedSearch: boolean; queued: boolean; limited?: boolean }): string {
   const parts: string[] = [];
   const budget = namesWithStatus(sources, "budget_reached");
   const paused = namesWithStatus(sources, "cooldown");
   const failed = namesWithStatus(sources, "error");
   const skipped = namesWithStatus(sources, "skipped");
   const stale = namesWithStatus(sources, "stale");
-  if (budget.text) parts.push(`Today’s free lookup allowance is used up, so live results from ${budget.text} were skipped.`);
+  if (budget.text) parts.push(flags.limited
+    ? `You have run many fresh lookups in the last hour, so live results from ${budget.text} were skipped to protect the shared daily allowance.`
+    : `Today’s free lookup allowance is used up, so live results from ${budget.text} were skipped.`);
   if (paused.text) parts.push(`${paused.text} ${paused.plural ? "are" : "is"} temporarily paused after repeated errors.`);
   if (failed.text) parts.push(`${failed.text} did not respond.`);
   if (skipped.text) parts.push(`${skipped.text} ${skipped.plural ? "were" : "was"} skipped to conserve today’s free lookups.`);
@@ -939,9 +941,20 @@ function incompleteNotice(sources: MarketplaceSourceStatus[], flags: { productCo
  * Warm mode skips the exact cache and the stored-catalog shortcut (it exists to
  * refresh them), may only use a fraction of the daily budget, and never queues.
  */
-export async function discoverCatalog(params: URLSearchParams, options: { mode?: "user" | "warm" } = {}): Promise<CatalogReply> {
+export async function discoverCatalog(params: URLSearchParams, options: { mode?: "user" | "warm"; liveLookup?: () => boolean } = {}): Promise<CatalogReply> {
   const warm = options.mode === "warm";
-  const reserve: ReserveBudget = (provider, units) => reserveProviderBudget(provider, units, warm ? { dailyShare: warmDailyShare() } : undefined);
+  // The first time a provider would be called for this search, ask whether this client may make another fresh
+  // lookup. If not, no provider is called: the saved, stale or closest results are shown instead.
+  let liveDecided = false;
+  let liveLimited = false;
+  const reserve: ReserveBudget = async (provider, units) => {
+    if (!warm && options.liveLookup) {
+      if (!liveDecided) { liveDecided = true; liveLimited = !options.liveLookup(); }
+      if (liveLimited) return false;
+    }
+    return reserveProviderBudget(provider, units, warm ? { dailyShare: warmDailyShare() } : undefined);
+  };
+  const budgetReason = () => liveLimited ? "Fresh lookups from your connection are paused for a while." : "Today's free lookup allowance is used up.";
 
   const categoryValue = (params.get("category") || "sneakers").toLowerCase();
   const category = (["sneakers", "apparel", "accessories", "all"] as string[]).includes(categoryValue) ? categoryValue as CatalogBrowseCategory : null;
@@ -1084,8 +1097,8 @@ export async function discoverCatalog(params: URLSearchParams, options: { mode?:
       continue;
     }
     if (!(await reserve("pckt", source.credits))) {
-      if (await fallbackToSaved(source.key, source.name, sourceCacheKey, "Today's free lookup allowance is used up.")) continue;
-      sources.push({ key: source.key, name: source.name, status: "budget_reached", results: 0, message: "Daily or monthly PCKT safety budget reached. Cached catalog records remain available." });
+      if (await fallbackToSaved(source.key, source.name, sourceCacheKey, budgetReason())) continue;
+      sources.push({ key: source.key, name: source.name, status: "budget_reached", results: 0, message: liveLimited ? "Fresh lookups from your connection are paused for up to an hour to protect the shared daily allowance. Saved results are shown." : "Daily or monthly PCKT safety budget reached. Cached catalog records remain available." });
       continue;
     }
     const providerStartedAt = Date.now();
@@ -1125,8 +1138,8 @@ export async function discoverCatalog(params: URLSearchParams, options: { mode?:
         sources.push({ key: "nike", name: nikeName, status: "cooldown", results: 0, message: "Temporarily paused after repeated API.SH errors." });
       }
     } else if (!(await reserve("apish", 1))) {
-      if (!(await fallbackToSaved("nike", nikeName, nikeSnapshotKey, "Today's free lookup allowance is used up."))) {
-        sources.push({ key: "nike", name: nikeName, status: "budget_reached", results: 0, message: "Daily or monthly API.SH safety budget reached. Saved catalog records remain available." });
+      if (!(await fallbackToSaved("nike", nikeName, nikeSnapshotKey, budgetReason()))) {
+        sources.push({ key: "nike", name: nikeName, status: "budget_reached", results: 0, message: liveLimited ? "Fresh lookups from your connection are paused for up to an hour to protect the shared daily allowance. Saved results are shown." : "Daily or monthly API.SH safety budget reached. Saved catalog records remain available." });
       }
     } else {
       const providerStartedAt = Date.now();
@@ -1173,8 +1186,8 @@ export async function discoverCatalog(params: URLSearchParams, options: { mode?:
       sources.push({ key: "shopping", name: shoppingName, status: "cooldown", results: 0, message: `Temporarily paused after repeated provider errors${cooldown.disabledUntil ? ` until ${cooldown.disabledUntil}` : ""}.` });
     }
   } else if (!(await reserve("serpapi", 1))) {
-    if (!(await fallbackToSaved("shopping", shoppingName, shoppingCacheKey, "Today's free lookup allowance is used up."))) {
-      sources.push({ key: "shopping", name: shoppingName, status: "budget_reached", results: 0, message: "Daily or monthly SerpApi safety budget reached. Cached catalog entries remain available." });
+    if (!(await fallbackToSaved("shopping", shoppingName, shoppingCacheKey, budgetReason()))) {
+      sources.push({ key: "shopping", name: shoppingName, status: "budget_reached", results: 0, message: liveLimited ? "Fresh lookups from your connection are paused for up to an hour to protect the shared daily allowance. Saved results are shown." : "Daily or monthly SerpApi safety budget reached. Cached catalog entries remain available." });
     }
   } else {
     const providerStartedAt = Date.now();
@@ -1250,7 +1263,8 @@ export async function discoverCatalog(params: URLSearchParams, options: { mode?:
     category, brand: brandValue, gender: genderValue, releaseYear: releaseYear ?? null, query: userQuery,
     products, sources, cached: false, cacheHours: CACHE_HOURS,
     incomplete: needsRefresh, approximate, savedSearch, queued, complete: !needsRefresh,
-    notice: needsRefresh ? incompleteNotice(sources, { productCount: products.length, approximate, savedSearch, queued }) : null,
+    limited: liveLimited,
+    notice: needsRefresh ? incompleteNotice(sources, { productCount: products.length, approximate, savedSearch, queued, limited: liveLimited }) : null,
     note: "Catalog records include historical/discontinued product models where indexed by providers. A catalog record does not establish a current retailer offer or size availability.",
   });
 }

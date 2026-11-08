@@ -2,7 +2,7 @@
 
 Planned direction after v3.2. Order reflects dependencies: confirm the data sources work, then the features that depend on them, then monetization and scale.
 
-**Shipped so far:** v2.3 never-empty search and warm-up, v2.4 Nike.com and Channel3 cross-store comparison, v2.5 eBay listings in Compare, v2.6 Impact partner catalogs in Compare, v2.7 admin live connection test, v2.8 anonymous outbound click counts, v2.9 affiliate link templates, v3.0 accurate size filtering with per-size prices, v3.1 browser-only saved searches with price-drop tracking, v3.2 optional Impact feed ingestion, v3.3 single gender control with best price for your size across all sources, v3.4 edge caching, anonymous search demand and demand-driven refresh, v3.5 privacy page, affiliate disclosure and site hygiene.
+**Shipped so far:** v2.3 never-empty search and warm-up, v2.4 Nike.com and Channel3 cross-store comparison, v2.5 eBay listings in Compare, v2.6 Impact partner catalogs in Compare, v2.7 admin live connection test, v2.8 anonymous outbound click counts, v2.9 affiliate link templates, v3.0 accurate size filtering with per-size prices, v3.1 browser-only saved searches with price-drop tracking, v3.2 optional Impact feed ingestion, v3.3 single gender control with best price for your size across all sources, v3.4 edge caching, anonymous search demand and demand-driven refresh, v3.5 privacy page, affiliate disclosure and site hygiene, v3.6 per-connection fresh-lookup limit.
 
 | Release | Focus | Why this order |
 |---|---|---|
