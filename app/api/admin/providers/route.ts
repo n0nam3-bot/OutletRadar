@@ -104,7 +104,7 @@ export async function GET(request: NextRequest) {
     const counts = catalogRows[0] || { canonical_products: 0, retailer_offers: 0, size_variants: 0 };
     return NextResponse.json({
       service: "outlet-radar",
-      version: "3.4.0",
+      version: "3.5.0",
       checkedAt: new Date().toISOString(),
       budgets: (Object.keys(PROVIDER_BUDGETS) as Array<keyof typeof PROVIDER_BUDGETS>).map((provider) => {
         const monthlyLimit = PROVIDER_BUDGETS[provider].monthly;

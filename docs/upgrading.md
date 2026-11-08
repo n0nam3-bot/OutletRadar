@@ -20,6 +20,7 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 | Version | Migration to run | Required? |
 |---|---|---|
 | v3.2.0 | `006_feed_ingest_state.sql` | Only needed for bulk feed ingestion (off by default). |
+| v3.5.0 | None | No database change. |
 | v3.4.0 | `007_search_demand_daily.sql` | Recommended. Without it searches work and demand is simply not recorded. |
 | v3.3.0, v3.1.0, v3.0.0 | None | No database change. |
 | v2.9.0 | None | No database change. |
@@ -34,6 +35,10 @@ Releases are delivered as a ZIP and applied by the GitHub Actions workflow in `.
 | v1.7 | `001_multi_retailer.sql` | Required. Retailer search cache and monthly usage. |
 
 For a brand-new database, run the whole of `db/schema.sql` instead of the individual migrations. It is idempotent and always reflects the current schema.
+
+## Upgrading from v3.4.0 to v3.5.0
+
+No migration needed. Upload the v3.5 ZIP. Optionally add `SITE_OPERATOR`, `CONTACT_EMAIL` and `SITE_URL` in Vercel and redeploy, then open `/privacy`, `/disclosure`, `/robots.txt` and `/sitemap.xml` to check them. Read both pages once to confirm they match what you want to promise visitors.
 
 ## Upgrading from v3.3.0 to v3.4.0
 

@@ -392,3 +392,12 @@
 .catalog-size-row em{grid-column:2;font:9px var(--mono);font-style:normal;color:#7b8678}
 .catalog-size-row.is-verified em{color:#1f7a3a}
 .catalog-size-row.is-best strong{color:#1f7a3a}
+
+/* v3.5: privacy and affiliate disclosure pages */
+.legal-page{max-width:720px;margin:0 auto;padding:48px 24px 80px;font:15px/1.7 var(--body);color:#243024}
+.legal-page h1{font:700 32px var(--display);margin:8px 0 4px}
+.legal-page h2{font:600 17px var(--display);margin:28px 0 6px}
+.legal-page p{margin:0 0 12px}
+.legal-page a{color:#1f7a3a}
+.legal-updated{font:11px var(--mono);color:#7b8678}
+.legal-back{display:inline-block;margin-bottom:12px;font:12px var(--mono);text-decoration:none}

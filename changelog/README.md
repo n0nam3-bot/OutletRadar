@@ -4,6 +4,7 @@ Release notes for each Outlet Radar version, newest first. Upgrade instructions 
 
 | Version | Summary |
 |---|---|
+| [v3.5.0](./v3.5.0.md) | Privacy page, affiliate disclosure, robots/sitemap, security headers |
 | [v3.4.0](./v3.4.0.md) | Edge caching, anonymous search demand, demand-driven refresh |
 | [v3.3.0](./v3.3.0.md) | One gender control; best price for your size across all sources; only your size shown |
 | [v3.2.0](./v3.2.0.md) | Optional bulk feed ingestion (Impact); Nike catalog read-back fix |

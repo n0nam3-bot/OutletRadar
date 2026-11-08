@@ -116,6 +116,7 @@ Without `DATABASE_URL` the catalog returns an error: Neon is required.
 | `EBAY_CAMPAIGN_ID` | Optional | eBay Partner Network campaign id for affiliate links |
 | `IMPACT_ACCOUNT_SID`, `IMPACT_AUTH_TOKEN` | Optional | Impact partner offers in Compare |
 | `IMPACT_DAILY_BUDGET`, `IMPACT_MONTHLY_BUDGET` | Optional | Default 500 and 15000 calls |
+| `SITE_OPERATOR`, `CONTACT_EMAIL`, `SITE_URL` | Optional | Your name, contact address and public address, shown on the privacy and disclosure pages and used for `sitemap.xml` |
 | `CATALOG_CDN_SECONDS`, `WARM_MIN_SEARCHES` | Optional | CDN lifetime of complete search answers (default 600, 0 = off); searches needed in 7 days before the warm-up refreshes them (default 2) |
 | `FEED_INGEST_ENABLED`, `IMPACT_FEED_CATALOG_IDS` | Optional | Turn on bulk Impact feed ingestion and choose the catalogs; see [Bulk feed ingestion](#bulk-feed-ingestion) |
 | `FEED_PAGES_PER_RUN`, `FEED_MAX_DB_MB`, `FEED_ITEM_REGEX` | Optional | Pages per run (default 2), database size limit (default 350 MB), which items to keep (default footwear) |
@@ -197,6 +198,8 @@ Releases are applied by uploading a ZIP to the repository root; a GitHub Action 
 ```text
 app/
   page.tsx                      Search, results and comparison UI
+  privacy/  disclosure/         Privacy and affiliate disclosure pages
+  robots.ts  sitemap.ts         robots.txt and sitemap.xml
   globals.css                   Styles
   layout.tsx                    Root layout
   admin/providers/              Owner diagnostics page
@@ -222,6 +225,7 @@ lib/
   provider-selftest.ts          Live connection test used by the admin page
   provider-health.ts            Telemetry and circuit breaker
   query-normalize.ts            Search shorthand expansion
+  site-info.ts                  Operator, contact and site address for the legal pages
   warm-seeds.ts                 Popular searches kept warm
   search-cache.ts  search-match.ts  nike.ts  audience.ts  types.ts  db.ts
 db/
@@ -239,7 +243,11 @@ vercel.json                     Cron schedule
 - [Serving many visitors](./docs/scaling.md): edge caching, demand-driven refresh and what cannot be free
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v3.4.0](./changelog/v3.4.0.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v3.5.0](./changelog/v3.5.0.md))
+
+## Privacy and disclosure
+
+The site ships with a privacy page (`/privacy`) and an affiliate disclosure (`/disclosure`), linked from the footer. They describe exactly what the app stores (no accounts, no cookies of its own, anonymous daily counts, a browser-only saved-search list, and a watchlist keyed by a random browser identifier). Set `SITE_OPERATOR` and `CONTACT_EMAIL` so they name you, and keep them accurate if you change what the app does. They are a plain-language starting point, not legal advice.
 
 ## Data and license
 
