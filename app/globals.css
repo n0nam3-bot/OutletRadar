@@ -401,3 +401,7 @@
 .legal-page a{color:#1f7a3a}
 .legal-updated{font:11px var(--mono);color:#7b8678}
 .legal-back{display:inline-block;margin-bottom:12px;font:12px var(--mono);text-decoration:none}
+
+/* v3.8: setup checklist */
+.admin-coverage-row.is-required{border-color:#e0b4b4;background:#fdf3f3}
+.admin-coverage-row.is-required strong{color:#a33}

@@ -5,6 +5,7 @@ import { PROVIDER_BUDGETS } from "@/lib/provider-budget";
 import { getCatalogQueueStats } from "@/lib/catalog-queue";
 import { feedCatalogIds, feedEnabled } from "@/lib/feed-ingest";
 import { demandTableAvailable, emptySearches, topSearches } from "@/lib/search-demand";
+import { getSetupStatus } from "@/lib/setup-status";
 import { summarizeCoverage, type RetailerCoverageRow } from "@/lib/retailer-targets";
 
 export const runtime = "nodejs";
@@ -104,7 +105,7 @@ export async function GET(request: NextRequest) {
     const counts = catalogRows[0] || { canonical_products: 0, retailer_offers: 0, size_variants: 0 };
     return NextResponse.json({
       service: "outlet-radar",
-      version: "3.5.0",
+      version: "3.8.0",
       checkedAt: new Date().toISOString(),
       budgets: (Object.keys(PROVIDER_BUDGETS) as Array<keyof typeof PROVIDER_BUDGETS>).map((provider) => {
         const monthlyLimit = PROVIDER_BUDGETS[provider].monthly;
@@ -123,6 +124,7 @@ export async function GET(request: NextRequest) {
       clicks,
       feedIngest,
       demand,
+      setup: await getSetupStatus(),
       catalog: {
         canonicalProducts: counts.canonical_products,
         retailerOffers: counts.retailer_offers,

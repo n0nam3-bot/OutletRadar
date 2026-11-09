@@ -566,6 +566,42 @@ check("Limit (route): a limited answer is edge-cached for only 30 seconds", limi
 delete process.env.LIVE_LOOKUPS_PER_HOUR; live.resetLiveLimits();
 await pg.query("UPDATE retailer_api_usage_daily SET units_reserved = 0"); await pg.query("DELETE FROM retailer_search_cache");
 
+// ---- v3.8: setup checklist ----
+const setupMod = await import("../lib/setup-status.ts");
+const savedEnv = { ...process.env };
+for (const k of ["PCKT_API_KEY","SERPAPI_API_KEY","API_SH_KEY","CHANNEL3_API_KEY","EBAY_CLIENT_ID","EBAY_CLIENT_SECRET","IMPACT_ACCOUNT_SID","IMPACT_AUTH_TOKEN","AFFILIATE_LINK_TEMPLATES","FEED_INGEST_ENABLED","IMPACT_FEED_CATALOG_IDS","SITE_OPERATOR","CONTACT_EMAIL","SITE_URL"]) delete process.env[k];
+process.env.CRON_SECRET = "short-secret";
+let setup = await setupMod.getSetupStatus();
+const byId = (list: any) => Object.fromEntries(list.items.map((i: any) => [i.id, i]));
+let sb = byId(setup);
+check("Setup: every migration is detected as applied on a fully migrated database", ["001","002","003","004","005","006","007"].every((id) => sb[`migration-${id}`].ok === true), JSON.stringify(setup.items.filter((i: any) => i.id.startsWith("migration") && !i.ok).map((i: any) => i.id)));
+check("Setup: a short CRON_SECRET is flagged as required-but-not-ok", sb["cron-secret"].ok === false && sb["cron-secret"].level === "required");
+check("Setup: unset keys are not ok; levels are right (PCKT required, others optional/recommended)", sb.pckt.ok === false && sb.pckt.level === "required" && sb.channel3.ok === false && sb.channel3.level === "optional" && sb.serpapi.level === "recommended" && sb.site.ok === false);
+process.env.CRON_SECRET = "x".repeat(40);
+process.env.PCKT_API_KEY = "pckt-secret-value-abc123"; process.env.EBAY_CLIENT_ID = "ebay-id-secret-777"; process.env.EBAY_CLIENT_SECRET = "ebay-cert-secret-888";
+process.env.IMPACT_ACCOUNT_SID = "IRsecret999"; process.env.IMPACT_AUTH_TOKEN = "impact-token-secret";
+process.env.SITE_OPERATOR = "Op"; process.env.CONTACT_EMAIL = "owner@example.com"; process.env.SITE_URL = "https://shop.example.com";
+process.env.AFFILIATE_LINK_TEMPLATES = JSON.stringify({ "goat.com": "https://goat.sjv.io/c/1?u={url}" });
+process.env.FEED_INGEST_ENABLED = "true"; process.env.IMPACT_FEED_CATALOG_IDS = "42";
+setup = await setupMod.getSetupStatus(); sb = byId(setup);
+check("Setup: configured items turn ok (secret length, keys, pairs, affiliate templates, feed, site settings)", ["cron-secret","pckt","ebay","impact","affiliate","feed","site"].every((id) => sb[id].ok === true), JSON.stringify(setup.items.filter((i: any) => !i.ok).map((i: any) => i.id)));
+check("Setup: an eBay key without its secret (or Impact SID without token) is not ok", (delete process.env.EBAY_CLIENT_SECRET, (await setupMod.getSetupStatus()).items.find((i: any) => i.id === "ebay")!.ok === false));
+process.env.EBAY_CLIENT_SECRET = "ebay-cert-secret-888";
+check("Setup: summary counts required and recommended items", setup.summary.required >= 5 && setup.summary.requiredOk === setup.summary.required, JSON.stringify(setup.summary));
+const secretsLeaked = ["pckt-secret-value-abc123", "ebay-id-secret-777", "ebay-cert-secret-888", "IRsecret999", "impact-token-secret", "x".repeat(40), "goat.sjv.io"].filter((secret) => JSON.stringify(setup).includes(secret));
+check("Setup: no secret value, token or tracking link ever appears in the report", secretsLeaked.length === 0, JSON.stringify(secretsLeaked));
+await pg.exec("DROP TABLE offer_click_daily");
+const missing = byId(await setupMod.getSetupStatus());
+check("Setup: a missing table is reported with the migration to run", missing["migration-005"].ok === false && /005_offer_click_daily/.test(missing["migration-005"].hint) && missing["migration-004"].ok === true);
+await pg.exec(stripExtension(readFileSync(new URL("db/migrations/005_offer_click_daily.sql", root), "utf8")));
+const adminSetup = await adminRoute.GET({ headers: { get: (k: string) => k.toLowerCase() === "authorization" ? `Bearer ${"x".repeat(40)}` : null }, nextUrl: { searchParams: new URLSearchParams() } } as any);
+const asb: any = await adminSetup.json();
+check("Setup: the admin report includes the checklist, behind the secret", adminSetup.status === 200 && Array.isArray(asb.setup?.items) && asb.setup.items.length >= 15 && !JSON.stringify(asb.setup).includes("x".repeat(40)));
+const noAuthSetup = await adminRoute.GET({ headers: { get: () => null }, nextUrl: { searchParams: new URLSearchParams() } } as any);
+check("Setup: no checklist without the secret", noAuthSetup.status === 401);
+for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k];
+Object.assign(process.env, savedEnv);
+
 // S7 strict token matching regression: model 1 must not match model 14
 await pg.query("DELETE FROM canonical_products");
 const { persistCatalogSnapshot } = await import("../lib/catalog-store.ts");

@@ -4,7 +4,7 @@
  *   CONTACT_EMAIL  an address visitors can write to (privacy questions, removal requests)
  *   SITE_URL       the public address of the site, for robots.txt and the sitemap (for example https://outlet-radar.vercel.app)
  */
-export const LEGAL_LAST_UPDATED = "7 November 2026";
+export const LEGAL_LAST_UPDATED = "8 November 2026";
 
 export function siteOperator(): string | null {
   return process.env.SITE_OPERATOR?.trim() || null;

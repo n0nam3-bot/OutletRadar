@@ -28,6 +28,7 @@ type Diagnostics = {
   checkedAt: string;
   budgets: Budget[];
   providers: Provider[];
+  setup?: { items: Array<{ id: string; label: string; ok: boolean; level: "required" | "recommended" | "optional"; hint: string }>; summary: { required: number; requiredOk: number; recommended: number; recommendedOk: number } };
   demand?: { available: boolean; searches7d: number; top: Array<{ query: string; category: string; brand: string; gender: string; releaseYear: number; searches: number; emptyResults: number }>; empty: Array<{ query: string; category: string; brand: string; gender: string; releaseYear: number; searches: number; emptyResults: number }> };
   feedIngest?: { enabled: boolean; configuredCatalogs: number; tableAvailable: boolean; impactOffers: number; rows: Array<{ catalogId: string; name: string; nextPage: number; numPages: number | null; itemsSeen: number; productsSaved: number; cycles: number; lastRunAt: string | null; lastError: string | null }> };
   clicks?: { available: boolean; byStore: Array<{ retailer: string; source: string; clicks: number }>; byProduct: Array<{ title: string; clicks: number }>; total: number };
@@ -209,6 +210,15 @@ export default function ProviderAdminPage() {
               {probeTargets.map((target) => <div className={`admin-coverage-row ${target.providers.length ? "is-seen" : "is-missing"}`} key={target.name}>
                 <strong>{target.providers.length ? "✓" : "–"} {target.name}</strong>
                 <span>{target.providers.length ? `via ${target.providers.join(", ")}` : "not returned by any provider for this search"}</span>
+              </div>)}
+            </div>
+          </>}
+          {data.setup && <>
+            <div className="admin-section-heading"><h2>Setup checklist</h2><span>{data.setup.summary.requiredOk}/{data.setup.summary.required} required · {data.setup.summary.recommendedOk}/{data.setup.summary.recommended} recommended · values are never shown</span></div>
+            <div className="admin-coverage-list">
+              {data.setup.items.map((item) => <div className={`admin-coverage-row ${item.ok ? "is-seen" : item.level === "required" ? "is-missing is-required" : "is-missing"}`} key={item.id}>
+                <strong>{item.ok ? "✓" : item.level === "required" ? "!" : "–"} {item.label}</strong>
+                <span>{item.ok ? "OK" : `${item.level === "required" ? "Required. " : item.level === "recommended" ? "Recommended. " : "Optional. "}${item.hint}`}</span>
               </div>)}
             </div>
           </>}

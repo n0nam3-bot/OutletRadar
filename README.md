@@ -169,6 +169,7 @@ Safeguards: only items that match the item filter (default footwear) and have a 
 
 | Task | Where |
 |---|---|
+| See what is and is not set up (migrations, keys, settings) | `/admin/providers` → **Setup checklist** (values are never shown) |
 | Check provider usage, health, refresh queue | `/admin/providers` (enter `CRON_SECRET`) |
 | Confirm every provider connection works and which stores it returns | `/admin/providers` → **Run connection test** (about one credit per provider) |
 | Liveness check | `/api/health` (runs a DB query; do not poll it, it keeps Neon awake). `/api/health?light=1` checks configuration only. |
@@ -237,6 +238,7 @@ lib/
   query-normalize.ts            Search shorthand expansion
   live-limit.ts                 Per-connection fresh-lookup limit (in memory)
   site-info.ts                  Operator, contact and site address for the legal pages
+  setup-status.ts               Setup checklist (migrations, keys, settings)
   warm-seeds.ts                 Popular searches kept warm
   search-cache.ts  search-match.ts  nike.ts  audience.ts  types.ts  db.ts
 tests/                          Automated tests (npm test)
@@ -255,7 +257,7 @@ vercel.json                     Cron schedule
 - [Serving many visitors](./docs/scaling.md): edge caching, demand-driven refresh and what cannot be free
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v3.7.0](./changelog/v3.7.0.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v3.8.0](./changelog/v3.8.0.md))
 
 ## Privacy and disclosure
 
