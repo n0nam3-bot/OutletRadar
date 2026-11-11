@@ -214,6 +214,8 @@ export default function Home() {
   const [catalogCachedAt, setCatalogCachedAt] = useState<string | null>(null);
   // Set when the answer is incomplete (a provider is out of free lookups, paused, or only saved data is shown).
   const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
+  // Optional tip page (from /api/health?light=1). Tips are voluntary and processed by the tip service.
+  const [tipUrl, setTipUrl] = useState<string | null>(null);
 
   // Reports an outbound click for the owner's anonymous daily counts. The link stays a normal
   // direct link; this runs in the background and never delays or blocks navigation.
@@ -290,6 +292,7 @@ export default function Home() {
       fetch("/api/health?light=1").then((response) => response.json()).then((health) => {
         setProviderConfigured(Boolean(health.productSearchConfigured));
         setDatabaseConfigured(Boolean(health.databaseConfigured));
+        setTipUrl(typeof health.tipUrl === "string" && health.tipUrl.startsWith("https://") ? health.tipUrl : null);
       }).catch(() => { setProviderConfigured(false); });
     } catch {
       setProviderConfigured(false);
@@ -959,6 +962,11 @@ export default function Home() {
             </article>;
           })}</div> : <div className="catalog-explorer-empty"><strong>No products match those filters.</strong><span>Try clearing size, color, price or sale refinements. A product is excluded when its available catalog data does not confirm the selected attribute.</span></div>}
           <p className="catalog-disclaimer">Each card represents a product model. Compare offers opens only listings that pass the selected model's match checks, with direct links to the seller's product page.</p>
+          {tipUrl && <div className="support-line">
+            <span>Free to use, no account needed. If it saved you money, you can leave an optional tip to help cover hosting and data costs.</span>
+            <a className="support-button" href={tipUrl} target="_blank" rel="noopener noreferrer" onClick={() => trackOfferClick({ source: "tip", retailer: "Tip jar", url: tipUrl, title: "Tip link" })}>Leave a tip</a>
+            <a className="support-more" href="/support">How tips are used</a>
+          </div>}
         </div>}
       </section>
 
@@ -975,7 +983,7 @@ export default function Home() {
         {saved.length ? <div className="watchlist-grid">{saved.map((product) => <article className="watchlist-card" key={product.url}>{product.imageUrl ? <img src={product.imageUrl} alt="" /> : <PackageSearch size={26} />}<div><strong>{product.title}</strong><small>{product.subtitle || product.styleCode || "Saved product"}</small><span>{money(product.price, product.currency)}</span><a href={product.url} target="_blank" rel="noreferrer">Open listing <ExternalLink size={11} /></a></div><button type="button" onClick={() => void toggleSaved(product)} aria-label="Remove from watchlist"><X size={15} /></button></article>)}</div> : <div className="catalog-explorer-empty"><strong>No saved products yet.</strong><span>Save a model from the catalog using its bookmark icon.</span></div>}
       </section>
 
-      <footer className="footer"><div className="footer-brand">OUTLET<span>RADAR</span></div><div className="footer-copy">Independent product-discovery and price-comparison platform. Not affiliated with or endorsed by the brands, retailers or marketplaces displayed. Outlet Radar may earn commissions from qualifying purchases.</div><div className="footer-links"><a href="/privacy">Privacy</a><a href="/disclosure">Affiliate disclosure</a><a href="#catalog">Browse catalog</a><a className="nav-compare-link" href={activeCompareProduct ? `#catalog-offers-${activeCompareProduct.id}` : "#catalog"}>Compare</a></div></footer>
+      <footer className="footer"><div className="footer-brand">OUTLET<span>RADAR</span></div><div className="footer-copy">Independent product-discovery and price-comparison platform. Not affiliated with or endorsed by the brands, retailers or marketplaces displayed. Outlet Radar may earn commissions from qualifying purchases.</div><div className="footer-links">{tipUrl && <a href="/support">Support</a>}<a href="/privacy">Privacy</a><a href="/disclosure">Affiliate disclosure</a><a href="#catalog">Browse catalog</a><a className="nav-compare-link" href={activeCompareProduct ? `#catalog-offers-${activeCompareProduct.id}` : "#catalog"}>Compare</a></div></footer>
     </main>
   );
 }

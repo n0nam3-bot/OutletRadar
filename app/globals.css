@@ -405,3 +405,11 @@
 /* v3.8: setup checklist */
 .admin-coverage-row.is-required{border-color:#e0b4b4;background:#fdf3f3}
 .admin-coverage-row.is-required strong{color:#a33}
+
+/* v3.9: optional tip line and support page */
+.support-line{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin:18px 0 0;padding:12px 14px;border:1px solid #dfe5db;background:#fafbf8;font:12px/1.5 var(--body);color:#4a554a}
+.support-line span{flex:1 1 260px}
+.support-button{display:inline-block;padding:8px 14px;background:#17331f;color:#fff !important;font:600 12px var(--display);text-decoration:none;border-radius:2px}
+.support-more{font:11px var(--mono);color:#1f7a3a}
+.legal-page ul{margin:0 0 12px;padding-left:20px}
+.legal-page li{margin:0 0 6px}

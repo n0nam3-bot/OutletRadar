@@ -125,6 +125,7 @@ The tests run the real application code against an in-memory PostgreSQL with sim
 | `EBAY_CAMPAIGN_ID` | Optional | eBay Partner Network campaign id for affiliate links |
 | `IMPACT_ACCOUNT_SID`, `IMPACT_AUTH_TOKEN` | Optional | Impact partner offers in Compare |
 | `IMPACT_DAILY_BUDGET`, `IMPACT_MONTHLY_BUDGET` | Optional | Default 500 and 15000 calls |
+| `TIP_URL` | Optional | Optional tip page shown under results and on `/support` (default: the owner's Streamlabs tip page; `off` hides it) |
 | `LIVE_LOOKUPS_PER_HOUR` | Optional | Fresh provider lookups one connection may trigger per hour (default 15, 0 = off); past it the search is still answered from saved results |
 | `SITE_OPERATOR`, `CONTACT_EMAIL`, `SITE_URL` | Optional | Your name, contact address and public address, shown on the privacy and disclosure pages and used for `sitemap.xml` |
 | `CATALOG_CDN_SECONDS`, `WARM_MIN_SEARCHES` | Optional | CDN lifetime of complete search answers (default 600, 0 = off); searches needed in 7 days before the warm-up refreshes them (default 2) |
@@ -209,7 +210,7 @@ Releases are applied by uploading a ZIP to the repository root; a GitHub Action 
 ```text
 app/
   page.tsx                      Search, results and comparison UI
-  privacy/  disclosure/         Privacy and affiliate disclosure pages
+  privacy/  disclosure/  support/   Privacy, affiliate disclosure and support (tip) pages
   robots.ts  sitemap.ts         robots.txt and sitemap.xml
   globals.css                   Styles
   layout.tsx                    Root layout
@@ -257,7 +258,11 @@ vercel.json                     Cron schedule
 - [Serving many visitors](./docs/scaling.md): edge caching, demand-driven refresh and what cannot be free
 - [Upgrading](./docs/upgrading.md): ZIP workflow and migrations by version
 - [Roadmap](./docs/roadmap.md)
-- [Changelog](./changelog/README.md): notes for every release (current: [v3.8.0](./changelog/v3.8.0.md))
+- [Changelog](./changelog/README.md): notes for every release (current: [v3.9.0](./changelog/v3.9.0.md))
+
+## Tips
+
+A quiet "Leave a tip" line appears under search results, with a Support link in the footer and a `/support` page. The tip link defaults to the owner's Streamlabs page; set `TIP_URL` to change it or `TIP_URL=off` to hide it. Tips are voluntary, unlock nothing and are processed entirely by the tip service. Vercel's Fair Use Guidelines state that asking for donations is not commercial usage; see [docs/free-tier-operations.md](./docs/free-tier-operations.md#tips-and-hosting-terms).
 
 ## Privacy and disclosure
 

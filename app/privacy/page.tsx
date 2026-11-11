@@ -35,6 +35,9 @@ export default function PrivacyPage() {
       <h2>Hosting and technical logs</h2>
       <p>The site is served by hosting and database services (Vercel and Neon). Like most web services they may keep technical logs of requests, including IP addresses, under their own privacy policies. We do not use those logs to profile visitors.</p>
 
+      <h2>Tips</h2>
+      <p>If you choose to leave an optional tip, you are taken to the tip service&rsquo;s own page, which processes the tip under its own privacy policy. Outlet Radar does not receive or store your name or payment details. Clicking the tip link is counted as an anonymous click like any other outbound link.</p>
+
       <h2>Links to other sites</h2>
       <p>When you open a store or marketplace link you leave Outlet Radar. That site, and any affiliate network that tracks the click, may set cookies and collect data under its own policy. See the <a href="/disclosure">affiliate disclosure</a>.</p>
 

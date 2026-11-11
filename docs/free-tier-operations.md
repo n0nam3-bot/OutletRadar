@@ -62,6 +62,14 @@ Vercel Hobby cannot run a cron more than once a day. GitHub Actions can, for fre
 
 Each run only spends what is left of the warm-up's daily share, so extra runs cannot exceed it.
 
+## Tips and hosting terms
+
+The optional tip link (`TIP_URL`) is a plain link to an outside page; the site never processes a payment.
+
+- **Vercel.** The [Fair Use Guidelines](https://vercel.com/docs/limits/fair-use-guidelines) (last updated 14 September 2026 when checked) restrict Hobby to non-commercial personal use. They list affiliate linking as the primary purpose of a site, and advertisements, as commercial usage, and state that asking for donations does not fall under commercial usage. So a tip link is fine on Hobby. Collecting payments on the site, running ads, or making affiliate links the site's main purpose would require the Pro plan.
+- **Neon.** The [plans page](https://neon.com/docs/introduction/plans) positions the Free plan for prototypes, side projects and small teams. I found no rule about donations; read Neon's terms if the site becomes a business.
+- Terms change. Re-check both pages before you rely on them, and if you are unsure ask the provider's support.
+
 ## Tuning
 
 All optional; set them in Vercel → Settings → Environment Variables.

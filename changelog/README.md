@@ -4,6 +4,7 @@ Release notes for each Outlet Radar version, newest first. Upgrade instructions 
 
 | Version | Summary |
 |---|---|
+| [v3.9.0](./v3.9.0.md) | Optional tip link and support page |
 | [v3.8.0](./v3.8.0.md) | Setup checklist on the admin page |
 | [v3.7.0](./v3.7.0.md) | `npm test`: the automated test suite ships with the repo |
 | [v3.6.0](./v3.6.0.md) | Per-connection fresh-lookup limit (protects the shared allowance) |

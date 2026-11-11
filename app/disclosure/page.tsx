@@ -19,6 +19,9 @@ export default function DisclosurePage() {
       <h2>What this does not change</h2>
       <p>Affiliate relationships do not change which prices are shown or how results are ordered. Results are ordered by how many of your filters they match and, when you enter a size, by the price for that size. A store is not placed higher because it pays a commission.</p>
 
+      <h2>Tips</h2>
+      <p>The site may also show an optional tip link. Tips are voluntary, unlock nothing and do not affect which prices are shown or how results are ordered. See the <a href="/support">support page</a>.</p>
+
       <h2>Prices and stock</h2>
       <p>Prices, sizes and availability come from third-party data services and change quickly, so what you see may be out of date. A size marked as available on a marketplace means the marketplace reported an active offer for it; a size that a retailer merely lists is marked as unconfirmed. Always check the price, size, condition and seller on the store&rsquo;s own page before you buy. Independent sellers on marketplaces such as eBay are not verified by Outlet Radar.</p>
 

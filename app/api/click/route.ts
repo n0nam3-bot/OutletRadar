@@ -4,7 +4,7 @@ import { getDb } from "@/lib/db";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const SOURCES = new Set(["stockx", "goat", "flightclub", "kickscrew", "shopping", "nike", "channel3", "ebay", "impact"]);
+const SOURCES = new Set(["stockx", "goat", "flightclub", "kickscrew", "shopping", "nike", "channel3", "ebay", "impact", "tip"]);
 // Anonymous endpoint: cap how many distinct rows can be created per day so it cannot be used to fill the database.
 const MAX_ROWS_PER_DAY = 5000;
 

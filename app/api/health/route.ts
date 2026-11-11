@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { tipUrl } from "@/lib/site-info";
 import { getDb } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -12,6 +13,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       service: "outlet-radar", databaseConfigured,
       productSearchConfigured: Boolean(process.env.PCKT_API_KEY || process.env.SERPAPI_API_KEY || process.env.API_SH_KEY),
+      tipUrl: tipUrl(),
     });
   }
   let database: "connected" | "not_configured" | "unavailable" = databaseConfigured ? "unavailable" : "not_configured";
@@ -38,7 +40,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     service: "outlet-radar",
-    version: "3.8.0",
+    version: "3.9.0",
     status: database === "unavailable" ? "degraded" : "ok",
     database,
     databaseConfigured,

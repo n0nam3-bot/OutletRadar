@@ -602,6 +602,20 @@ check("Setup: no checklist without the secret", noAuthSetup.status === 401);
 for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k];
 Object.assign(process.env, savedEnv);
 
+// ---- v3.9: tip link ----
+delete process.env.TIP_URL;
+const healthLight = await health.GET({ nextUrl: { searchParams: new URLSearchParams({ light: "1" }) } } as any);
+const hl: any = await healthLight.json();
+check("Tip: the light health check reports the tip link (default Streamlabs page) without touching the database", hl.tipUrl === "https://streamlabs.com/artofreyes/tip" && hl.database === undefined, JSON.stringify(hl));
+process.env.TIP_URL = "off";
+const hlOff: any = await (await health.GET({ nextUrl: { searchParams: new URLSearchParams({ light: "1" }) } } as any)).json();
+check("Tip: TIP_URL=off removes it from the page configuration", hlOff.tipUrl === null);
+delete process.env.TIP_URL;
+await pg.query("DELETE FROM offer_click_daily");
+await clickRoute.POST(clickReq({ source: "tip", retailer: "Tip jar", url: "https://streamlabs.com/artofreyes/tip", title: "Tip link" }));
+const tipRows = (await pg.query("SELECT source, retailer, host, clicks FROM offer_click_daily")).rows as any[];
+check("Tip: a tip-link click is counted anonymously (source tip, host streamlabs.com), nothing else stored", tipRows.length === 1 && tipRows[0].source === "tip" && tipRows[0].host === "streamlabs.com" && tipRows[0].clicks === 1, JSON.stringify(tipRows));
+
 // S7 strict token matching regression: model 1 must not match model 14
 await pg.query("DELETE FROM canonical_products");
 const { persistCatalogSnapshot } = await import("../lib/catalog-store.ts");
